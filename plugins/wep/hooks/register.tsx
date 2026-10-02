@@ -25,6 +25,10 @@ const PAIR_POLL_MS = 2000
 const PLAYER_PROBE_MS = 3000
 // ffplay's own small PulseAudio buffer crackles on WSL's bridge to Windows; a bigger one plays clean.
 const FFPLAY = ['env', 'PULSE_LATENCY_MSEC=1000', 'ffplay']
+// With that buffer ffplay reaches the end of the clip while the last of it is still waiting to be heard,
+// and -autoexit drops what waits. A clip whose length is known is left open instead, and stopped this long
+// after its length: time for ffplay to start, and for the buffer to empty.
+const FFPLAY_DRAIN_MS = 2000
 // The terminal draws Indic script wider than the pane measures it, so a shorter word leaves the end of the
 // last one behind. Each round trails its two prompt lines with blanks unlike the round before's, which
 // makes the pane write over those cells.
@@ -169,7 +173,10 @@ async function playClip($: EngineInterface, clip: Clip | null, onEnd?: () => voi
   if (!clip || !isSoundOn || !token) return
   stopClip()
   const turn = clipTurn
+  let hasEnded = false
   const ended = () => {
+    if (hasEnded) return
+    hasEnded = true
     if (turn === clipTurn) onEnd?.()
   }
   // The token rides in the URL because it is the one form both players can send.
@@ -196,18 +203,32 @@ async function playClip($: EngineInterface, clip: Clip | null, onEnd?: () => voi
 
       return
     }
+    // The server cut the recording to its in and out points, so what plays is as long as they are apart.
+    const lengthMs = ffplay === FFPLAY ? Math.round((clip.endSeconds - clip.startSeconds) * 1000) : 0
     const child = $.process.spawn({
-      argv: [...ffplay, '-nodisp', '-autoexit', '-loglevel', 'quiet', url],
+      argv: [...ffplay, '-nodisp', ...(lengthMs > 0 ? [] : ['-autoexit']), '-loglevel', 'quiet', url],
     })
     child.result.catch(() => {})
     // Leaving the stream is what ends the child.
-    stopPlaying = () => void child.return({ code: null, signal: null }).catch(() => {})
+    const leave = () => void child.return({ code: null, signal: null }).catch(() => {})
+    const drained =
+      lengthMs > 0
+        ? $.clock.after(lengthMs + FFPLAY_DRAIN_MS, () => {
+            leave()
+            ended()
+          })
+        : undefined
+    stopPlaying = () => {
+      drained?.cancel()
+      leave()
+    }
     void (async () => {
       try {
         for await (const piece of child) void piece
       } catch {
         // ffplay went away, or could not reach the server.
       }
+      drained?.cancel()
       ended()
     })()
   } catch {
