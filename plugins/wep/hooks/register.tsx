@@ -3,6 +3,7 @@ import type { EngineInterface, Register, Timer } from 'claude-code'
 
 import {
   buildOptions,
+  defaultQ3Ms,
   isPlayable,
   promptOf,
   requeueAfterMiss,
@@ -10,20 +11,46 @@ import {
   timeLimitMs,
   withSample,
 } from '../lib/game'
-import type { GameConfig, Item, ItemStats } from '../lib/game'
+import type { GameConfig, Item, ItemStats, Mode } from '../lib/game'
 import type { WepOption, WepScore, WepView } from '../types'
 
 const PANE = 'wep'
 const TITLE = 'Word Exchange Plaza'
 const DROP_IN_DELAY_MS = 2000
-const HAND_BACK_MS = 3000
 const CORRECT_PAUSE_MS = 1200
 const MISS_PAUSE_MS = 3000
 const TICK_MS = 500
 const PAIR_POLL_MS = 2000
 const PERFECT_SESSION_MIN_ATTEMPTS = 10
+const DEFAULT_COOLDOWN_SECONDS = 30
+// Long haul: a skip this soon after the answer is the answering key, not a request.
+const SKIP_GRACE_MS = 600
+// Long haul: an answer later than this many time limits is recorded without its time.
+const LATE_AFTER_LIMITS = 2
 
-const WELCOME: WepView = { kind: 'message', title: TITLE, lines: ['Loading your phrases…'] }
+const MODES: { mode: Mode; label: string; sub: string; empty: string[] }[] = [
+  { mode: 1, label: 'Level 1', sub: 'Reaction Time', empty: ['Nothing to practise at Level 1 right now.', 'Check back later.'] },
+  {
+    mode: 2,
+    label: 'Level 2',
+    sub: 'Fill in the Blank',
+    empty: ['No phrases to fill in right now.', 'Build up Level 1 first, or check back later.'],
+  },
+  {
+    mode: 3,
+    label: 'Level 3',
+    sub: 'Full Phrases',
+    empty: ['No full phrases to practise right now.', 'Play Level 1 to unlock some, or check back later.'],
+  },
+  {
+    mode: 'extinction',
+    label: 'Extinction',
+    sub: 'Review extinct words',
+    empty: ['No extinct words to review.', 'Words go extinct as you master them at Level 1.'],
+  },
+]
+
+const WELCOME: WepView = { kind: 'message', title: TITLE, lines: ['Loading…'], hasMenu: false }
 const view = atom({ plugin: 'wep', key: 'view' } as const, WELCOME)
 const isOffered = atom({ plugin: 'wep', key: 'isOffered' } as const, false)
 
@@ -32,6 +59,9 @@ type Session = {
   course: string
   config: GameConfig
   timeoutBufferMs: number
+  isLongHaul: boolean
+  /** Long haul: how long an answered round stays up before the next one. */
+  cooldownMs: number
   pool: Item[]
   queue: Item[]
   stats: Map<string, ItemStats>
@@ -47,6 +77,10 @@ type Round = {
   limitMs: number
   frozenAt: number | null
   chosen: number | null
+  /** When the answer came, null while the round is open. */
+  settledAt: number | null
+  /** Long haul: when the next round starts by itself, null when it waits for the person. */
+  nextAt: number | null
 }
 
 class ApiError extends Error {
@@ -55,17 +89,22 @@ class ApiError extends Error {
   }
 }
 
+/** The server is older than this mode: its link tokens cannot reach the mode's routes. */
+class ModeUnavailable extends Error {}
+
 // A hook's `$` may only be handed to functions declared at the top of this
 // file, so the game's state lives here beside them rather than in `register`.
 let baseUrl = 'https://wordexchangeplaza.com'
 
 let isOn = false
 let token: string | null = null
-let isTurnRunning = false
+// Closed by hand: stays closed, across turns, until /wep opens it again.
 let isDismissed = false
-// idle: out of the way. waiting: a turn began, drop-in armed. playing: the
-// pane is up. handing-back: Claude finished, the pane closes in a moment.
-let phase: 'idle' | 'waiting' | 'playing' | 'handing-back' = 'idle'
+// idle: out of the way. waiting: drop-in armed. playing: the pane is up.
+let phase: 'idle' | 'waiting' | 'playing' = 'idle'
+let mode: Mode = 3
+// The menu comes first in every session, then whenever it is asked for.
+let isMenuUp = true
 let phaseTimer: Timer | undefined
 let session: Session | null = null
 let round: Round | null = null
@@ -89,21 +128,27 @@ async function api($: EngineInterface, method: string, path: string, body?: unkn
 }
 
 const showMessage = ($: EngineInterface, ...lines: string[]) =>
-  update($, view, (): WepView => ({ kind: 'message', title: TITLE, lines }))
+  update($, view, (): WepView => ({ kind: 'message', title: TITLE, lines, hasMenu: token !== null }))
+
+const named = (of: Mode) => MODES.find(entry => entry.mode === of) ?? MODES[2]!
 
 async function draw($: EngineInterface) {
   if (!session || !round) return
-  const elapsed = (round.frozenAt ?? (await $.clock.now())) - round.startedAt
+  const now = await $.clock.now()
+  const elapsed = (round.frozenAt ?? now) - round.startedAt
   const prompt = promptOf(round.item, session.config)
   const next: WepView = {
     kind: 'round',
     course: session.course,
+    modeLabel: named(session.config.level).sub,
     prompt: prompt.text,
     promptSub: prompt.sub,
     options: round.options,
     chosen: round.chosen,
     spent: Math.max(0, Math.min(10, Math.floor((elapsed / round.limitMs) * 10))),
     limitSeconds: Math.round(round.limitMs / 1000),
+    isLongHaul: session.isLongHaul,
+    nextInSeconds: round.nextAt === null ? null : Math.max(0, Math.ceil((round.nextAt - now) / 1000)),
     score: { ...score },
     notice,
   }
@@ -121,18 +166,28 @@ async function loadSession($: EngineInterface): Promise<Session> {
     api($, 'GET', '/api/gameplay/course'),
   ])
   const settings = me.data.settings ?? {}
-  const mode: 'a' | 'b' = settings.gameMode === 'b' ? 'b' : 'a'
   const courseId = String(course.data.courseId)
   const kinds: string[] = (course.data.transliterationTypes ?? []).map(String)
   const saved = settings.transliteration?.[course.data.targetLanguage]
   const transliteration = kinds.includes(saved) ? saved : (kinds[0] ?? saved ?? 'itrans')
-  const samples = await $.store.get(`samples:${courseId}:${mode}`)
+  const direction: 'a' | 'b' = settings.gameMode === 'b' ? 'b' : 'a'
+  // Level 3 kept its samples without the level in the key before there was a menu.
+  const samples =
+    (await $.store.get(`samples:${courseId}:${mode}:${direction}`)) ??
+    (mode === 3 ? await $.store.get(`samples:${courseId}:${direction}`) : undefined)
 
   const loaded: Session = {
     courseId,
     course: String(course.data.title ?? courseId),
-    config: { mode, difficulty: settings.difficultyMode === 'hard' ? 'hard' : 'easy', transliteration },
+    config: {
+      level: mode,
+      mode: direction,
+      difficulty: settings.difficultyMode === 'hard' ? 'hard' : 'easy',
+      transliteration,
+    },
     timeoutBufferMs: Number(settings.timeoutBuffer ?? 1000),
+    isLongHaul: settings.longHaulMode === true,
+    cooldownMs: Math.max(0, Number(settings.longHaulCooldownSeconds ?? DEFAULT_COOLDOWN_SECONDS)) * 1000,
     pool: [],
     queue: [],
     stats: new Map(),
@@ -145,11 +200,20 @@ async function loadSession($: EngineInterface): Promise<Session> {
 }
 
 async function loadItems($: EngineInterface, into: Session) {
-  const { data } = await api(
-    $,
-    'GET',
-    `/api/gameplay/course/${encodeURIComponent(into.courseId)}/items?mode=${into.config.mode}&level=3`,
-  )
+  const course = encodeURIComponent(into.courseId)
+  const { level, mode: direction } = into.config
+  let data: { items?: unknown }
+  if (level === 'extinction') {
+    try {
+      data = (await api($, 'GET', `/api/extinction/items?courseId=${course}&mode=${direction}`)).data
+    } catch (error) {
+      // /api/me answered this token a moment ago, so a refusal here is the route's.
+      if (error instanceof ApiError && (error.status === 401 || error.status === 403)) throw new ModeUnavailable()
+      throw error
+    }
+  } else {
+    data = (await api($, 'GET', `/api/gameplay/course/${course}/items?mode=${direction}&level=${level}`)).data
+  }
   const items: Item[] = Array.isArray(data.items) ? data.items : []
   into.pool = items.filter(item => isPlayable(item, into.config))
   into.queue = sortByWeight(into.pool, into.stats)
@@ -173,24 +237,29 @@ async function startRound($: EngineInterface) {
       await update($, view, () => WELCOME)
       session = await loadSession($)
     }
-    if (session.queue.length === 0) session.queue = sortByWeight(session.pool, session.stats)
+    // An extinct word is reviewed once; the levels go round again.
+    if (session.queue.length === 0 && session.config.level !== 'extinction') {
+      session.queue = sortByWeight(session.pool, session.stats)
+    }
   } catch (error) {
-    if (!(await unlinkOn(error, $))) {
-      await showMessage($, 'Could not reach Word Exchange Plaza.', 'It will try again on the next turn.')
+    if (error instanceof ModeUnavailable) {
+      await showMessage($, 'Extinction needs a newer Word Exchange Plaza server.', 'Pick another mode for now.')
+    } else if (!(await unlinkOn(error, $))) {
+      await showMessage($, 'Could not reach Word Exchange Plaza.', 'Pick a mode to try again.')
     }
 
     return
   }
-  // The hand-back may have come while the phrases loaded.
-  if (phase !== 'playing') return
+  // The pane may have stepped aside, or the menu come up, while the items loaded.
+  if (phase !== 'playing' || isMenuUp) return
 
   const item = session.queue.shift()
   if (!item) {
-    await showMessage(
-      $,
-      'No full phrases to practise right now.',
-      'Play Level 1 on the web to unlock some, or check back later.',
-    )
+    const isDone = session.config.level === 'extinction' && session.pool.length > 0
+    const [first = '', second = ''] = isDone
+      ? ['Extinction review done.', 'Every due word has been asked.']
+      : named(mode).empty
+    await showMessage($, first, second)
 
     return
   }
@@ -199,15 +268,19 @@ async function startRound($: EngineInterface) {
     item,
     options: buildOptions(item, session.config),
     startedAt: await $.clock.now(),
-    limitMs: timeLimitMs(session.samples, session.timeoutBufferMs),
+    limitMs: timeLimitMs(session.samples, session.timeoutBufferMs, defaultQ3Ms(session.config.level)),
     frozenAt: null,
     chosen: null,
+    settledAt: null,
+    nextAt: null,
   }
   armRound($, round.limitMs)
   await draw($)
 }
 
 function armRound($: EngineInterface, remainingMs: number) {
+  // Long haul has no time limit: the item waits until it is answered.
+  if (session?.isLongHaul) return
   roundTimers = [
     $.clock.after(Math.max(0, remainingMs), () => void answer($, -1)),
     $.clock.every(TICK_MS, () => void draw($)),
@@ -223,40 +296,100 @@ async function answer($: EngineInterface, index: number) {
   played.chosen = index
 
   const isCorrect = played.options[index]?.isCorrect === true
-  const elapsedMs = Math.round((await $.clock.now()) - played.startedAt)
+  const now = await $.clock.now()
+  const elapsedMs = Math.round(now - played.startedAt)
   played.frozenAt = played.startedAt + elapsedMs
+  played.settledAt = now
 
+  if (index === -1) {
+    // Nobody was looking: the answer is shown, and nothing is counted or recorded.
+    await draw($)
+    roundTimers = [$.clock.after(MISS_PAUSE_MS, () => void startRound($))]
+
+    return
+  }
+
+  const { level } = game.config
+  const isLate = game.isLongHaul && elapsedMs > played.limitMs * LATE_AFTER_LIMITS
   const seen = game.stats.get(played.item.itemId) ?? { correct: 0, incorrect: 0 }
   game.stats.set(played.item.itemId, {
     correct: seen.correct + (isCorrect ? 1 : 0),
     incorrect: seen.incorrect + (isCorrect ? 0 : 1),
   })
-  game.samples = withSample(game.samples, elapsedMs, isCorrect)
-  // A miss comes back soon; a timeout waits for the next pass, as on the web.
-  if (!isCorrect && index !== -1) game.queue = requeueAfterMiss(game.queue, played.item)
+  if (!isLate) game.samples = withSample(game.samples, elapsedMs, isCorrect, defaultQ3Ms(level))
+  // A miss comes back soon, except an extinct word, which a miss sends back to its level.
+  if (!isCorrect && level !== 'extinction') game.queue = requeueAfterMiss(game.queue, played.item)
 
   score.attempts += 1
   score.correct += isCorrect ? 1 : 0
   score.streak = isCorrect ? score.streak + 1 : 0
+  if (!game.isLongHaul) {
+    roundTimers = [$.clock.after(isCorrect ? CORRECT_PAUSE_MS : MISS_PAUSE_MS, () => void startRound($))]
+  } else if (game.cooldownMs > 0) {
+    played.nextAt = now + game.cooldownMs
+    roundTimers = [
+      $.clock.after(game.cooldownMs, () => void startRound($)),
+      $.clock.every(TICK_MS, () => void draw($)),
+    ]
+  } else if (isCorrect) {
+    // No cooldown: a right answer moves on, a wrong one waits to be read.
+    roundTimers = [$.clock.after(CORRECT_PAUSE_MS, () => void startRound($))]
+  }
   await draw($)
-  roundTimers = [$.clock.after(isCorrect ? CORRECT_PAUSE_MS : MISS_PAUSE_MS, () => void startRound($))]
 
   try {
-    await $.store.set(`samples:${game.courseId}:${game.config.mode}`, game.samples)
-    const { data } = await api($, 'POST', '/api/gameplay/record', {
+    await $.store.set(`samples:${game.courseId}:${level}:${game.config.mode}`, game.samples)
+    const answered = {
       itemId: played.item.itemId,
       courseId: game.courseId,
       mode: game.config.mode,
-      level: 3,
       isCorrect,
-      reactionTimeMs: elapsedMs,
-    })
+      reactionTimeMs: isLate ? null : elapsedMs,
+    }
+    const { data } =
+      level === 'extinction'
+        ? await api($, 'POST', '/api/extinction/record', answered)
+        : await api($, 'POST', '/api/gameplay/record', {
+            ...answered,
+            level,
+            ...(level === 2 ? { blankWordItemId: played.item.blankWord?.itemId } : {}),
+          })
     score.streak = Number(data.currentStreak ?? score.streak)
     score.points += Number(data.pointsAwarded ?? 0)
-    if (data.wentExtinct || data.tierAscended || data.levelComplete) await loadItems($, game)
+    if (level !== 'extinction' && (data.wentExtinct || data.tierAscended || data.levelComplete)) {
+      await loadItems($, game)
+    }
   } catch (error) {
     if (await unlinkOn(error, $)) clearRoundTimers()
   }
+}
+
+/** The person's skip past an answered round, as long haul's Next. */
+async function skip($: EngineInterface) {
+  if (phase !== 'playing' || !round || round.settledAt === null) return
+  if ((await $.clock.now()) - round.settledAt < SKIP_GRACE_MS) return
+  await startRound($)
+}
+
+async function showMenu($: EngineInterface) {
+  isMenuUp = true
+  await freeze($)
+  const last = (await $.store.get('mode')) === undefined ? -1 : MODES.findIndex(entry => entry.mode === mode)
+  await update(
+    $,
+    view,
+    (): WepView => ({ kind: 'menu', title: TITLE, choices: MODES.map(({ label, sub }) => ({ label, sub })), last }),
+  )
+}
+
+async function choose($: EngineInterface, picked: Mode) {
+  if (phase !== 'playing') return
+  isMenuUp = false
+  // A mode with no round in flight ended on a message: picking it loads it afresh.
+  if (picked !== mode || !round) await endSession($)
+  mode = picked
+  await $.store.set('mode', picked)
+  await thaw($)
 }
 
 /** Stops the clock: an open round keeps its place, a settled one is dropped. */
@@ -269,6 +402,7 @@ async function freeze($: EngineInterface) {
 
 async function thaw($: EngineInterface) {
   notice = ''
+  if (isMenuUp) return showMenu($)
   if (!round || round.frozenAt === null || round.chosen !== null) return startRound($)
   const now = await $.clock.now()
   round.startedAt += now - round.frozenAt
@@ -278,7 +412,7 @@ async function thaw($: EngineInterface) {
 }
 
 function armDropIn($: EngineInterface) {
-  if (!isOn || !token || !isTurnRunning || isDismissed || phase !== 'idle') return
+  if (!isOn || !token || isDismissed || phase !== 'idle') return
   phase = 'waiting'
   phaseTimer = $.clock.after(DROP_IN_DELAY_MS, () => void dropIn($))
 }
@@ -301,7 +435,7 @@ async function dropIn($: EngineInterface) {
 
 async function goAway($: EngineInterface, toast?: string) {
   phaseTimer?.cancel()
-  const wasUp = phase === 'playing' || phase === 'handing-back'
+  const wasUp = phase === 'playing'
   phase = 'idle'
   await update($, isOffered, () => false)
   if (!wasUp) return
@@ -317,7 +451,8 @@ async function endSession($: EngineInterface) {
   const game = session
   session = null
   round = null
-  if (!game || !token || score.attempts < PERFECT_SESSION_MIN_ATTEMPTS || score.correct !== score.attempts) return
+  if (!game || !token || game.config.level === 'extinction') return
+  if (score.attempts < PERFECT_SESSION_MIN_ATTEMPTS || score.correct !== score.attempts) return
   try {
     await api($, 'POST', '/api/gameplay/session-end', {
       courseId: game.courseId,
@@ -382,10 +517,12 @@ export const register: Register = (on, options) => {
     const link = (await $.store.get('link')) as { token?: string; baseUrl?: string } | undefined
     token = link?.token && link.baseUrl === baseUrl ? link.token : null
     isOn = (await $.store.get('isOn')) === true
+    const saved = await $.store.get('mode')
+    mode = MODES.find(entry => entry.mode === saved)?.mode ?? mode
     await $.command.register({
       name: 'wep',
       description: 'Play Word Exchange Plaza while Claude works',
-      argumentHint: '[off|unlink]',
+      argumentHint: '[menu|hide|off|unlink]',
       immediate: true,
     })
 
@@ -413,6 +550,13 @@ export const register: Register = (on, options) => {
       return { text: 'This terminal is unlinked from Word Exchange Plaza.' }
     }
 
+    if (arg === 'hide') {
+      isDismissed = true
+      await goAway($)
+
+      return { text: 'Word Exchange Plaza is hidden. Run /wep to bring it back.' }
+    }
+
     isOn = true
     isDismissed = false
     await $.store.set('isOn', true)
@@ -421,22 +565,17 @@ export const register: Register = (on, options) => {
     } catch {
       return { text: `Could not reach ${baseUrl}. Try /wep again in a moment.` }
     }
+    if (arg === 'menu') isMenuUp = true
     if (phase !== 'playing') await dropIn($)
+    else if (arg === 'menu') await showMenu($)
 
-    return { text: 'Word Exchange Plaza is on: it drops in while Claude works and steps aside when Claude needs you.' }
+    return {
+      text: 'Word Exchange Plaza is on: it stays open while you work and steps aside when Claude needs you. /wep menu changes mode, /wep hide closes it.',
+    }
   })
 
   on('turn.start', async ($, e, next) => {
-    isTurnRunning = true
-    isDismissed = false
-    if (phase === 'handing-back') {
-      // A queued prompt started before the pane closed: keep playing.
-      phaseTimer?.cancel()
-      phase = 'playing'
-      await thaw($)
-    } else {
-      armDropIn($)
-    }
+    armDropIn($)
 
     return next(e)
   })
@@ -444,16 +583,10 @@ export const register: Register = (on, options) => {
   on('turn.complete', async ($, e, next) => {
     // A subagent finishing is not Claude finishing.
     if (e.agentId) return next(e)
-    isTurnRunning = false
-    if (phase === 'playing' && !e.isAborted) {
-      await freeze($)
-      phase = 'handing-back'
-      notice = "Claude's done · handing you back"
-      await draw($)
-      phaseTimer = $.clock.after(HAND_BACK_MS, () => void goAway($, `Claude's done${tally()}`))
-    } else {
-      await goAway($)
-    }
+    // The pane stays up between turns: closing it here made it flap each time
+    // a background agent woke Claude. Only a turn too short to open it is let go.
+    if (phase === 'waiting') await goAway($)
+    else if (phase === 'playing' && !e.isAborted) $.ui.toast(`Claude's done${tally()}`)
 
     return next(e)
   })
@@ -476,8 +609,7 @@ export const register: Register = (on, options) => {
 
   on('ui.close', async ($, e, next) => {
     if (e.id === PANE && e.origin.kind === 'person') {
-      // Closed by hand: stay out for the rest of this turn.
-      isDismissed = isTurnRunning
+      isDismissed = true
       phaseTimer?.cancel()
       phase = 'idle'
       await freeze($)
@@ -488,7 +620,7 @@ export const register: Register = (on, options) => {
 
   on('ui.render', { component: 'Spinner' }, ($, e, next) =>
     isOn && score.attempts > 0
-      ? next({ ...e, props: { ...e.props, suffix: ` · ${score.correct}/${score.attempts} phrases right…` } })
+      ? next({ ...e, props: { ...e.props, suffix: ` · ${score.correct}/${score.attempts} right…` } })
       : next(e),
   )
 
@@ -507,6 +639,8 @@ export const register: Register = (on, options) => {
     const { Box, Button, Text } = $.ui.resolve(e)
     const shown = await read($, view)
 
+    const menu = <Button key="menu" hotkey="m" plain label="Menu" onPress={() => showMenu($)} />
+
     if (shown.kind === 'message') {
       return (
         <Box flexDirection="column">
@@ -514,18 +648,52 @@ export const register: Register = (on, options) => {
           {shown.lines.map(line => (
             <Text dimColor>{line}</Text>
           ))}
+          {shown.hasMenu && menu}
+        </Box>
+      )
+    }
+
+    if (shown.kind === 'menu') {
+      return (
+        <Box flexDirection="column">
+          <Text bold>{shown.title} · pick a mode</Text>
+          {shown.choices.map((choice, index) => (
+            <Button
+              key={`mode-${index}`}
+              hotkey={String(index + 1)}
+              plain
+              label={`${choice.label} · ${choice.sub}${index === shown.last ? '  (last played)' : ''}`}
+              onPress={() => choose($, MODES[index]!.mode)}
+            />
+          ))}
         </Box>
       )
     }
 
     const isOpen = shown.chosen === null && shown.notice === ''
     const label = (option: WepOption) => (option.sub ? `${option.text}  (${option.sub})` : option.text)
-    const verdict = shown.chosen === null ? '' : shown.options[shown.chosen]?.isCorrect ? 'Correct' : shown.chosen === -1 ? 'Too slow' : 'Not quite'
+    const verdict =
+      shown.chosen === null
+        ? ''
+        : shown.options[shown.chosen]?.isCorrect
+          ? 'Correct'
+          : shown.chosen === -1
+            ? 'Timed out · not counted'
+            : 'Not quite'
+    const countdown =
+      shown.nextInSeconds === null
+        ? ''
+        : ` · next in ${Math.floor(shown.nextInSeconds / 60)}:${String(shown.nextInSeconds % 60).padStart(2, '0')}`
+    const waiting = shown.isLongHaul
+      ? 'Long haul · no time limit'
+      : `${'█'.repeat(10 - shown.spent)}${'░'.repeat(shown.spent)}  ${shown.limitSeconds}s`
 
     return (
       <Box flexDirection="column">
         <Box justifyContent="space-between">
-          <Text dimColor>{shown.course} · Full Phrases</Text>
+          <Text dimColor>
+            {shown.course} · {shown.modeLabel}
+          </Text>
           <Text dimColor>
             streak {shown.score.streak} · {shown.score.correct}/{shown.score.attempts} this session
           </Text>
@@ -548,11 +716,17 @@ export const register: Register = (on, options) => {
             ),
           )}
         </Box>
-        <Text key="status" dimColor={verdict === ''}>
-          {shown.notice ||
-            verdict ||
-            `${'█'.repeat(10 - shown.spent)}${'░'.repeat(shown.spent)}  ${shown.limitSeconds}s`}
-        </Text>
+        <Box justifyContent="space-between">
+          <Text key="status" dimColor={verdict === ''}>
+            {shown.notice || (verdict ? verdict + countdown : waiting)}
+          </Text>
+          <Box>
+            {shown.isLongHaul && verdict !== '' && (
+              <Button key="next" hotkey="n" plain label="Next  " onPress={() => skip($)} />
+            )}
+            {menu}
+          </Box>
+        </Box>
       </Box>
     )
   })

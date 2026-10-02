@@ -15,18 +15,35 @@ const ITEM = {
   ],
 }
 
+const WORD = {
+  itemId: 'w1',
+  type: 'word',
+  targetText: 'पानी',
+  english: ['water'],
+  transliterations: { itrans: 'pAnI' },
+  confusables: [
+    { native: 'चाय', resolvedEnglish: ['tea'] },
+    { native: 'दूध', resolvedEnglish: ['milk'] },
+    { native: 'खाना', resolvedEnglish: ['food'] },
+  ],
+}
+const BLANKED = { ...ITEM, itemId: 'p2', targetText: 'मुझे पानी चाहिए', english: ['I need water'], blankWord: WORD }
+
 type World = {
   clock: ReturnType<typeof mock.clock>
   opens: number
   closes: number
   toasts: string[]
-  records: { isCorrect: boolean; reactionTimeMs: number; level: number }[]
+  records: { path: string; isCorrect: boolean; reactionTimeMs: number | null; level?: number; blankWordItemId?: string }[]
   requests: string[]
 }
 
 // The world beneath the plugin: a linked, switched-on terminal (unless told
 // otherwise), a server with one phrase, and a terminal wide enough for a pane.
-function world(on: On, { isLinked = true, isOn = true, isPlaced = true, check = 'allow' } = {}): World {
+function world(
+  on: On,
+  { isLinked = true, isOn = true, isPlaced = true, check = 'allow', settings = {}, hasExtinction = true } = {},
+): World {
   const state: World = { clock: mock.clock(on, { now: 1_000_000 }), opens: 0, closes: 0, toasts: [], records: [], requests: [] }
   mock.store(on, { ...(isLinked ? { link: { token: 'link-token', baseUrl: BASE } } : {}), isOn })
 
@@ -36,11 +53,19 @@ function world(on: On, { isLinked = true, isOn = true, isPlaced = true, check = 
   on('http.fetch', ($, e) => {
     const path = e.url.replace(BASE, '')
     state.requests.push(`${e.init?.method ?? 'GET'} ${path}`)
-    if (path === '/api/me') return json({ currentStreak: 4, settings: { gameMode: 'a', difficultyMode: 'hard' } })
+    if (path === '/api/me') {
+      return json({ currentStreak: 4, settings: { gameMode: 'a', difficultyMode: 'hard', ...settings } })
+    }
     if (path === '/api/gameplay/course') return json({ courseId: 'hi-en-v1', title: 'Hindi', transliterationTypes: ['itrans'] })
-    if (path.startsWith('/api/gameplay/course/hi-en-v1/items')) return json({ items: [ITEM] })
-    if (path === '/api/gameplay/record') {
-      state.records.push(JSON.parse(e.init?.body ?? '{}'))
+    if (path.startsWith('/api/gameplay/course/hi-en-v1/items')) {
+      return json({ items: [path.endsWith('level=1') ? WORD : path.endsWith('level=2') ? BLANKED : ITEM] })
+    }
+    if (path.startsWith('/api/extinction/')) {
+      if (!hasExtinction) return json({ error: 'This token cannot be used here' }, 403)
+      if (path.startsWith('/api/extinction/items')) return json({ items: [WORD] })
+    }
+    if (path === '/api/gameplay/record' || path === '/api/extinction/record') {
+      state.records.push({ path, ...JSON.parse(e.init?.body ?? '{}') })
 
       return json({ ok: true, currentStreak: 5, pointsAwarded: 10 })
     }
@@ -86,6 +111,17 @@ const PANE_PROPS = {
   placement: 'inline',
 } as never
 
+const mountPane = ($: Parameters<Parameters<typeof test>[1]>[0]) =>
+  $.ui.mount({ plugin: 'wep', surface: 'terminal', component: 'Pane', requestId: 'wep', props: PANE_PROPS })
+type Pane = Awaited<ReturnType<typeof mountPane>>
+
+const buttons = async (pane: Pane) => pane.findAll({ type: 'Button' })
+const pressText = async (pane: Pane, text: string) => {
+  const button = (await buttons(pane)).find(candidate => candidate.text?.includes(text))
+  expect(button).toBeDefined()
+  await pane.press({ key: String(button?.key) })
+}
+
 test('drops in two seconds after a turn starts, not before', async ($, on) => {
   const w = world(on)
   await $.session.start(START)
@@ -94,7 +130,6 @@ test('drops in two seconds after a turn starts, not before', async ($, on) => {
   expect(w.opens).toBe(0)
   await w.clock.advance(200)
   expect(w.opens).toBe(1)
-  expect(w.requests).toContain('GET /api/me')
 })
 
 test('a turn that ends within two seconds never opens the pane', async ($, on) => {
@@ -116,25 +151,45 @@ test('stays out when switched off or not linked', async ($, on) => {
   expect(w.requests).toEqual([])
 })
 
-test('hands back three seconds after Claude finishes, with the score', async ($, on) => {
+test('opens on the menu, and loads nothing until a mode is picked', async ($, on) => {
+  const w = world(on)
+  await $.session.start(START)
+  await $.turn.start(turn)
+  await w.clock.advance(2100)
+  const pane = await mountPane($)
+  const labels = (await buttons(pane)).map(button => button.text)
+  expect(labels.length).toBe(4)
+  expect(labels[0]).toContain('Level 1')
+  expect(labels[3]).toContain('Extinction')
+  expect(w.requests).toEqual([])
+  await pressText(pane, 'Level 3')
+  expect(w.requests).toContain('GET /api/gameplay/course/hi-en-v1/items?mode=a&level=3')
+  await pane.unmount()
+})
+
+test('stays open when Claude finishes, and through the next turn', async ($, on) => {
   const w = world(on)
   await $.session.start(START)
   await $.turn.start(turn)
   await w.clock.advance(2100)
   await $.turn.complete(done)
+  await w.clock.advance(10_000)
+  await $.turn.start({ ...turn, turnId: 't2' })
+  await w.clock.advance(2100)
+  await $.turn.complete({ ...done, turnId: 't2' })
+  await w.clock.advance(10_000)
+  expect(w.opens).toBe(1)
   expect(w.closes).toBe(0)
-  await w.clock.advance(3100)
-  expect(w.closes).toBe(1)
   expect(w.toasts.some(text => text.startsWith("Claude's done"))).toBe(true)
 })
 
-test('an interrupted turn closes at once', async ($, on) => {
+test('an interrupted turn leaves it open', async ($, on) => {
   const w = world(on)
   await $.session.start(START)
   await $.turn.start(turn)
   await w.clock.advance(2100)
   await $.turn.complete({ ...done, isAborted: true, reason: 'aborted' })
-  expect(w.closes).toBe(1)
+  expect(w.closes).toBe(0)
 })
 
 test('keeps playing when a subagent finishes', async ($, on) => {
@@ -169,6 +224,22 @@ test('a question for the person pulls out', async ($, on) => {
   expect(w.closes).toBe(1)
 })
 
+test('/wep hide closes it across turns until /wep brings it back', async ($, on) => {
+  const w = world(on)
+  await $.session.start(START)
+  await $.turn.start(turn)
+  await w.clock.advance(2100)
+  await $.command.run({ command: 'wep', args: 'hide' } as never)
+  expect(w.closes).toBe(1)
+  await $.turn.complete(done)
+  await $.turn.start({ ...turn, turnId: 't2' })
+  await $.tool.call({ tool: 'Bash', tool_use_id: 'tu1', command: 'ls' } as never)
+  await w.clock.advance(5000)
+  expect(w.opens).toBe(1)
+  await $.command.run({ command: 'wep', args: '' } as never)
+  expect(w.opens).toBe(2)
+})
+
 test('a narrow terminal gets an offer above the prompt instead of a pane', async ($, on) => {
   const w = world(on, { isPlaced: false })
   await $.session.start(START)
@@ -184,15 +255,83 @@ test('a right answer is recorded with the time it took, at level 3', async ($, o
   await $.session.start(START)
   await $.turn.start(turn)
   await w.clock.advance(2000)
-  const pane = await $.ui.mount({ plugin: 'wep', surface: 'terminal', component: 'Pane', requestId: 'wep', props: PANE_PROPS })
+  const pane = await mountPane($)
+  await pressText(pane, 'Level 3')
   await w.clock.advance(1500)
-  const right = (await pane.findAll({ type: 'Button' })).find(button => button.text?.includes('Hello friend'))
-  expect(right).toBeDefined()
-  await pane.press({ key: String(right?.key) })
+  await pressText(pane, 'Hello friend')
   expect(w.records.length).toBe(1)
   expect(w.records[0]?.isCorrect).toBe(true)
   expect(w.records[0]?.level).toBe(3)
   expect(w.records[0]?.reactionTimeMs).toBe(1500)
+  await pane.unmount()
+})
+
+test('level 1 asks a word and records at level 1', async ($, on) => {
+  const w = world(on)
+  await $.session.start(START)
+  await $.turn.start(turn)
+  await w.clock.advance(2000)
+  const pane = await mountPane($)
+  await pressText(pane, 'Level 1')
+  await pressText(pane, 'water')
+  expect(w.records[0]?.path).toBe('/api/gameplay/record')
+  expect(w.records[0]?.level).toBe(1)
+  await pane.unmount()
+})
+
+test('level 2 fills the blank and names the blank word in the record', async ($, on) => {
+  const w = world(on)
+  await $.session.start(START)
+  await $.turn.start(turn)
+  await w.clock.advance(2000)
+  const pane = await mountPane($)
+  await pressText(pane, 'Level 2')
+  await pressText(pane, 'water')
+  expect(w.records[0]?.level).toBe(2)
+  expect(w.records[0]?.blankWordItemId).toBe('w1')
+  await pane.unmount()
+})
+
+test('extinction records to its own route, and asks each word once', async ($, on) => {
+  const w = world(on)
+  await $.session.start(START)
+  await $.turn.start(turn)
+  await w.clock.advance(2000)
+  const pane = await mountPane($)
+  await pressText(pane, 'Extinction')
+  await pressText(pane, 'water')
+  expect(w.records[0]?.path).toBe('/api/extinction/record')
+  expect(w.records[0]?.level).toBeUndefined()
+  await w.clock.advance(1300)
+  expect((await buttons(pane)).map(button => button.text)).toEqual(['Menu'])
+  await pane.unmount()
+})
+
+test('a server without the extinction routes says so and keeps the link', async ($, on) => {
+  const w = world(on, { hasExtinction: false })
+  await $.session.start(START)
+  await $.turn.start(turn)
+  await w.clock.advance(2000)
+  const pane = await mountPane($)
+  await pressText(pane, 'Extinction')
+  await pressText(pane, 'Menu')
+  await pressText(pane, 'Level 3')
+  await pressText(pane, 'Hello friend')
+  expect(w.records.length).toBe(1)
+  await pane.unmount()
+})
+
+test('the menu button changes mode mid-game', async ($, on) => {
+  const w = world(on)
+  await $.session.start(START)
+  await $.turn.start(turn)
+  await w.clock.advance(2000)
+  const pane = await mountPane($)
+  await pressText(pane, 'Level 3')
+  await pressText(pane, 'Menu')
+  await pressText(pane, 'Level 1')
+  await pressText(pane, 'water')
+  expect(w.records[0]?.level).toBe(1)
   await pane.unmount()
 })
 
@@ -201,27 +340,82 @@ test('time spent handed back to Claude is not counted against the answer', async
   await $.session.start(START)
   await $.turn.start(turn)
   await w.clock.advance(2000)
+  const first = await mountPane($)
+  await pressText(first, 'Level 3')
+  await first.unmount()
   await w.clock.advance(1000)
   await $.tool.check({ tool: 'Bash', input: {}, tool_use_id: 'tu1' })
   await w.clock.advance(60_000)
   await $.tool.call({ tool: 'Bash', tool_use_id: 'tu1', command: 'ls' } as never)
   await w.clock.advance(2000)
-  const pane = await $.ui.mount({ plugin: 'wep', surface: 'terminal', component: 'Pane', requestId: 'wep', props: PANE_PROPS })
+  const pane = await mountPane($)
   await w.clock.advance(500)
-  const right = (await pane.findAll({ type: 'Button' })).find(button => button.text?.includes('Hello friend'))
-  await pane.press({ key: String(right?.key) })
+  await pressText(pane, 'Hello friend')
   expect(w.records[0]?.reactionTimeMs).toBe(1500)
   await pane.unmount()
 })
 
-test('running out of time counts as a miss', async ($, on) => {
+test('running out of time is not counted or recorded, and the next round comes', async ($, on) => {
   const w = world(on)
   await $.session.start(START)
   await $.turn.start(turn)
-  await w.clock.advance(2100)
+  await w.clock.advance(2000)
+  const pane = await mountPane($)
+  await pressText(pane, 'Level 3')
   await w.clock.advance(10_100)
+  expect(w.records.length).toBe(0)
+  expect((await buttons(pane)).some(button => button.text?.includes('Hello friend'))).toBe(false)
+  await w.clock.advance(3100)
+  await pressText(pane, 'Hello friend')
   expect(w.records.length).toBe(1)
+  expect(w.records[0]?.isCorrect).toBe(true)
+  await pane.unmount()
+})
+
+test('a wrong press is still recorded as a miss', async ($, on) => {
+  const w = world(on)
+  await $.session.start(START)
+  await $.turn.start(turn)
+  await w.clock.advance(2000)
+  const pane = await mountPane($)
+  await pressText(pane, 'Level 3')
+  await pressText(pane, 'Goodbye friend')
   expect(w.records[0]?.isCorrect).toBe(false)
+  await pane.unmount()
+})
+
+test('long haul waits for the answer, then counts down to the next round', async ($, on) => {
+  const w = world(on, { settings: { longHaulMode: true, longHaulCooldownSeconds: 30 } })
+  await $.session.start(START)
+  await $.turn.start(turn)
+  await w.clock.advance(2000)
+  const pane = await mountPane($)
+  await pressText(pane, 'Level 3')
+  await w.clock.advance(15_000)
+  await pressText(pane, 'Hello friend')
+  expect(w.records[0]?.reactionTimeMs).toBe(15_000)
+  await w.clock.advance(29_000)
+  expect((await buttons(pane)).some(button => button.text?.includes('Hello friend'))).toBe(false)
+  await w.clock.advance(1500)
+  expect((await buttons(pane)).some(button => button.text?.includes('Hello friend'))).toBe(true)
+  await pane.unmount()
+})
+
+test('long haul: Next skips the countdown, and a very late answer is recorded without its time', async ($, on) => {
+  const w = world(on, { settings: { longHaulMode: true } })
+  await $.session.start(START)
+  await $.turn.start(turn)
+  await w.clock.advance(2000)
+  const pane = await mountPane($)
+  await pressText(pane, 'Level 3')
+  await w.clock.advance(25_000)
+  await pressText(pane, 'Hello friend')
+  expect(w.records[0]?.isCorrect).toBe(true)
+  expect(w.records[0]?.reactionTimeMs).toBeNull()
+  await w.clock.advance(1000)
+  await pressText(pane, 'Next')
+  expect((await buttons(pane)).some(button => button.text?.includes('Hello friend'))).toBe(true)
+  await pane.unmount()
 })
 
 test('/wep on an unlinked terminal starts pairing and links once approved', async ($, on) => {

@@ -14,10 +14,25 @@ export type WepScore = {
 }
 
 export type WepView =
-  | { kind: 'message'; title: string; lines: string[] }
+  | {
+      kind: 'message'
+      title: string
+      lines: string[]
+      /** Whether the message offers the way back to the menu. */
+      hasMenu: boolean
+    }
+  | {
+      kind: 'menu'
+      title: string
+      choices: { label: string; sub: string }[]
+      /** The choice played last, -1 when none has been. */
+      last: number
+    }
   | {
       kind: 'round'
       course: string
+      /** The mode's name beside the course: 'Full Phrases', 'Extinction'. */
+      modeLabel: string
       prompt: string
       promptSub: string
       options: WepOption[]
@@ -26,6 +41,10 @@ export type WepView =
       /** Tenths of the time limit already spent, 0-10. */
       spent: number
       limitSeconds: number
+      /** Long haul: the round has no time limit and waits for its answer. */
+      isLongHaul: boolean
+      /** Long haul: seconds until the next round, null when none is counting down. */
+      nextInSeconds: number | null
       score: WepScore
       /** What the hand-back says over a frozen round ('' while playing). */
       notice: string

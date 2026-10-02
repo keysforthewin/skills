@@ -1,8 +1,8 @@
 {
   "name": "wep",
   "displayName": "Word Exchange Plaza",
-  "version": "0.1.0",
-  "description": "Practise your Word Exchange Plaza phrases while Claude works, and get handed back when it's done",
+  "version": "0.2.0",
+  "description": "Play Word Exchange Plaza's levels as a text game beside Claude while it works",
   "author": {
     "name": "keysforthewin"
   },

@@ -60,15 +60,20 @@ See [`plugins/discernment/SKILL.md`](plugins/discernment/SKILL.md).
 ## wep
 
 [Word Exchange Plaza](https://wordexchangeplaza.com) is a language-learning game
-built around reaction time. This plugin plays its "Full Phrases" level as a text
-game inside Claude Code, in the time you would otherwise spend watching a
-spinner.
+built around reaction time. This plugin plays it as a text game inside Claude
+Code, in the time you would otherwise spend watching a spinner.
 
-- Two seconds after a turn starts, a pane opens with a phrase and three or four
-  answers. Press `1`–`4`.
-- When Claude finishes, asks for permission or asks you a question, the pane
-  steps aside. The clock stops with it, so time spent answering Claude never
-  counts against your reaction time.
+- Two seconds into a turn, a pane opens on a menu: Level 1 (Reaction Time),
+  Level 2 (Fill in the Blank), Level 3 (Full Phrases) or Extinction (a review of
+  words you have mastered). Each round shows a prompt and three or four answers.
+  Press `1`–`4`; `m` goes back to the menu.
+- The pane stays open between turns. It steps aside only when Claude asks for
+  permission or asks you a question, and comes back once you have answered. The
+  clock stops with it, so that time never counts against your reaction time.
+- A round that times out is not counted: the answer is shown and the next round
+  comes. Only an answer you press is recorded.
+- With long haul switched on in your web settings, a round has no time limit,
+  and the next one follows after your cooldown (`n` skips the wait).
 - Answers are recorded on your Word Exchange Plaza account, the same as playing
   on the web.
 
@@ -77,12 +82,13 @@ shown with their romanised form beside them.
 
 Run `/wep` once to link the terminal to your account: it prints a link and a
 code, and you approve it in the browser while signed in. The token it gets can
-fetch your phrases and record answers, and nothing else on your account.
-`/wep off` turns it off; `/wep unlink` forgets the account.
+fetch your items and record answers, and nothing else on your account.
+`/wep menu` changes mode, `/wep hide` closes the pane until the next `/wep`,
+`/wep off` turns it off, and `/wep unlink` forgets the account.
 
 It needs Claude Code 2.1.287 or later (it uses the early-access function-hooks
 API, which may change between releases) and a Word Exchange Plaza account with
-some full phrases to practise. It is a plugin only; there is no plain-skill
+something to practise. It is a plugin only; there is no plain-skill
 install for it.
 
 ## Install
