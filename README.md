@@ -1,15 +1,13 @@
 # keysforthewin skills
 
-A Claude Code plugin marketplace with two skills. They are unrelated — install
-either or both.
+A Claude Code plugin marketplace with two skills and one game. They are
+unrelated — install any of them.
 
 | Skill | What it does |
 |---|---|
 | [**cleancode**](plugins/cleancode/SKILL.md) | Naming-first refactoring. Restructures code so it can be read from names alone, then verifies behaviour was preserved. |
 | [**discernment**](plugins/discernment/SKILL.md) | Situational judgment before answering. Not code-specific — it applies to any request. |
-
-> The repository is still named `cleancode` for historical reasons; the
-> marketplace it serves is `keysforthewin`.
+| [**wep**](plugins/wep) | Word Exchange Plaza in a pane while Claude works: practise your phrases, and get handed back when Claude is done or needs you. |
 
 ## cleancode
 
@@ -59,9 +57,37 @@ pasted content, emotionally loaded messages, and irreversible actions.
 
 See [`plugins/discernment/SKILL.md`](plugins/discernment/SKILL.md).
 
+## wep
+
+[Word Exchange Plaza](https://wordexchangeplaza.com) is a language-learning game
+built around reaction time. This plugin plays its "Full Phrases" level as a text
+game inside Claude Code, in the time you would otherwise spend watching a
+spinner.
+
+- Two seconds after a turn starts, a pane opens with a phrase and three or four
+  answers. Press `1`–`4`.
+- When Claude finishes, asks for permission or asks you a question, the pane
+  steps aside. The clock stops with it, so time spent answering Claude never
+  counts against your reaction time.
+- Answers are recorded on your Word Exchange Plaza account, the same as playing
+  on the web.
+
+It is plain text, so it works in any terminal. Phrases in a non-Latin script are
+shown with their romanised form beside them.
+
+Run `/wep` once to link the terminal to your account: it prints a link and a
+code, and you approve it in the browser while signed in. The token it gets can
+fetch your phrases and record answers, and nothing else on your account.
+`/wep off` turns it off; `/wep unlink` forgets the account.
+
+It needs Claude Code 2.1.287 or later (it uses the early-access function-hooks
+API, which may change between releases) and a Word Exchange Plaza account with
+some full phrases to practise. It is a plugin only; there is no plain-skill
+install for it.
+
 ## Install
 
-Two options per skill. The plugin gets updates handled for you; the clone gets
+Two options per skill (`wep` is a plugin only: use option 1). The plugin gets updates handled for you; the clone gets
 you the shorter command name. Pick one — installing both leaves two copies in
 the skill list.
 
@@ -76,9 +102,10 @@ the skill list.
 This repo is its own marketplace. Inside Claude Code:
 
 ```
-/plugin marketplace add keysforthewin/cleancode
+/plugin marketplace add keysforthewin/skills
 /plugin install cleancode@keysforthewin
 /plugin install discernment@keysforthewin
+/plugin install wep@keysforthewin
 /reload-plugins
 ```
 
@@ -98,7 +125,7 @@ A skill directory is `~/.claude/skills/<name>/` for every project, or
 this repo:
 
 ```bash
-git clone https://github.com/keysforthewin/cleancode.git /tmp/kftw-skills
+git clone https://github.com/keysforthewin/skills.git /tmp/kftw-skills
 cp -r /tmp/kftw-skills/plugins/cleancode   ~/.claude/skills/cleancode
 cp -r /tmp/kftw-skills/plugins/discernment ~/.claude/skills/discernment
 ```
@@ -149,6 +176,7 @@ Plugins:
 ```
 /plugin uninstall cleancode@keysforthewin
 /plugin uninstall discernment@keysforthewin
+/plugin uninstall wep@keysforthewin
 /plugin marketplace remove keysforthewin
 ```
 

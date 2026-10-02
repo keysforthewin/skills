@@ -1,6 +1,6 @@
 {
   "name": "keysforthewin",
-  "description": "Skills by keysforthewin: naming-first refactoring, and situational judgment before answering.",
+  "description": "Plugins by keysforthewin: naming-first refactoring, situational judgment before answering, and Word Exchange Plaza while Claude works.",
   "owner": {
     "name": "keysforthewin"
   },
@@ -14,6 +14,11 @@
       "name": "discernment",
       "source": "./plugins/discernment",
       "description": "Situational judgment before answering: read the request, your own knowledge, the sources, and the draft before sending it."
+    },
+    {
+      "name": "wep",
+      "source": "./plugins/wep",
+      "description": "Practise your Word Exchange Plaza phrases in a pane while Claude works, and get handed back when it's done."
     }
   ]
 }

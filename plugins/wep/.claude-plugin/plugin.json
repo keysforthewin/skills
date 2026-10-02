@@ -1,0 +1,26 @@
+{
+  "name": "wep",
+  "displayName": "Word Exchange Plaza",
+  "version": "0.1.0",
+  "description": "Practise your Word Exchange Plaza phrases while Claude works, and get handed back when it's done",
+  "author": {
+    "name": "keysforthewin"
+  },
+  "homepage": "https://wordexchangeplaza.com",
+  "license": "MIT",
+  "keywords": [
+    "language-learning",
+    "game",
+    "mod"
+  ],
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "baseUrl": {
+      "type": "string",
+      "title": "Server",
+      "description": "The Word Exchange Plaza site to play on",
+      "default": "https://wordexchangeplaza.com"
+    }
+  },
+  "repository": "https://github.com/keysforthewin/skills"
+}
