@@ -24,7 +24,7 @@ const TICK_MS = 500
 const PAIR_POLL_MS = 2000
 const PLAYER_PROBE_MS = 3000
 // ffplay's own small PulseAudio buffer crackles on WSL's bridge to Windows; a bigger one plays clean.
-const FFPLAY = ['env', 'PULSE_LATENCY_MSEC=250', 'ffplay']
+const FFPLAY = ['env', 'PULSE_LATENCY_MSEC=1000', 'ffplay']
 const PERFECT_SESSION_MIN_ATTEMPTS = 10
 const DEFAULT_COOLDOWN_SECONDS = 30
 // Long haul: a skip this soon after the answer is the answering key, not a request.
