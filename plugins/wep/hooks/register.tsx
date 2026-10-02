@@ -29,6 +29,8 @@ const DEFAULT_COOLDOWN_SECONDS = 30
 const SKIP_GRACE_MS = 600
 // Long haul: an answer later than this many time limits is recorded without its time.
 const LATE_AFTER_LIMITS = 2
+// Long haul: the prompt is spoken again after this much silence, until it is answered.
+const LOOP_GAP_MS = 3000
 
 const MODES: { mode: Mode; label: string; sub: string; empty: string[] }[] = [
   { mode: 1, label: 'Level 1', sub: 'Reaction Time', empty: ['Nothing to practise at Level 1 right now.', 'Check back later.'] },
@@ -64,6 +66,8 @@ type Session = {
   isLongHaul: boolean
   /** Long haul: how long an answered round stays up before the next one. */
   cooldownMs: number
+  /** Long haul: the prompt goes quiet once its time limit has passed, and still waits. */
+  stopsRepeatAtExpiry: boolean
   pool: Item[]
   queue: Item[]
   stats: Map<string, ItemStats>
@@ -117,6 +121,9 @@ let isSoundOn = true
 // Whether ffplay is on this machine, asked once; without it the engine's own player is used.
 let hasFfplay: boolean | undefined
 let stopPlaying: (() => void) | undefined
+// Counts every clip started or stopped, so a clip knows whether it ended or was cut off.
+let clipTurn = 0
+let repeatTimer: Timer | undefined
 const score: WepScore = { correct: 0, attempts: 0, streak: 0, points: 0 }
 
 async function api($: EngineInterface, method: string, path: string, body?: unknown, auth = true) {
@@ -139,14 +146,24 @@ const showMessage = ($: EngineInterface, ...lines: string[]) =>
 const named = (of: Mode) => MODES.find(entry => entry.mode === of) ?? MODES[2]!
 
 function stopClip() {
+  clipTurn += 1
+  repeatTimer?.cancel()
+  repeatTimer = undefined
   stopPlaying?.()
   stopPlaying = undefined
 }
 
-/** Starts the clip over whatever was playing. Sound is a bonus: a clip that cannot play is skipped. */
-async function playClip($: EngineInterface, clip: Clip | null) {
+/**
+ * Starts the clip over whatever was playing. Sound is a bonus: a clip that cannot play is skipped.
+ * `onEnd` is called when the clip ran out by itself, not when something stopped it.
+ */
+async function playClip($: EngineInterface, clip: Clip | null, onEnd?: () => void) {
   if (!clip || !isSoundOn || !token) return
   stopClip()
+  const turn = clipTurn
+  const ended = () => {
+    if (turn === clipTurn) onEnd?.()
+  }
   // The token rides in the URL because it is the one form both players can send.
   // trim=1 has the server cut the recording to its in and out points, so both players get the clip alone.
   const url = `${baseUrl}/api/gameplay/audio/${encodeURIComponent(clip.audioKey)}?token=${encodeURIComponent(token)}&trim=1`
@@ -157,13 +174,14 @@ async function playClip($: EngineInterface, clip: Clip | null) {
         .then(ran => ran.exitCode === 0)
         .catch(() => false)
       // Another clip, or a mute, may have come while the machine was asked.
-      if (stopPlaying || !isSoundOn) return
+      if (turn !== clipTurn || !isSoundOn) return
     }
     if (!hasFfplay) {
       // The engine's player has a voice on macOS only.
       const stop = new AbortController()
       stopPlaying = () => stop.abort()
-      void $.audio.play({ url }, { signal: stop.signal }).catch(() => {})
+      // A failed play is not a reason to stop repeating.
+      void $.audio.play({ url }, { signal: stop.signal }).then(ended, ended)
 
       return
     }
@@ -179,6 +197,7 @@ async function playClip($: EngineInterface, clip: Clip | null) {
       } catch {
         // ffplay went away, or could not reach the server.
       }
+      ended()
     })()
   } catch {
     // No player could be started.
@@ -190,8 +209,25 @@ function heardClip(of: Round, config: GameConfig): Clip | null {
   return clipOf(of.item, config, 'shown') ?? (of.chosen === null ? null : clipOf(of.item, config, 'settled'))
 }
 
+/** Speaks the open round's prompt; in long haul it is spoken again and again until the round is answered. */
+async function speakPrompt($: EngineInterface, of: Round) {
+  const game = session
+  if (!game || round !== of || of.chosen !== null || of.frozenAt !== null) return
+  await playClip($, clipOf(of.item, game.config, 'shown'), () => {
+    if (!game.isLongHaul || round !== of || of.chosen !== null || of.frozenAt !== null) return
+    repeatTimer = $.clock.after(LOOP_GAP_MS, () => void repeatPrompt($, of))
+  })
+}
+
+async function repeatPrompt($: EngineInterface, of: Round) {
+  if (session?.stopsRepeatAtExpiry && (await $.clock.now()) - of.startedAt > of.limitMs) return
+  await speakPrompt($, of)
+}
+
 async function replay($: EngineInterface) {
   if (phase !== 'playing' || !session || !round) return
+  // Replay on an open round takes over the repeating, so the gap starts again from it.
+  if (round.chosen === null) return speakPrompt($, round)
   await playClip($, heardClip(round, session.config))
 }
 
@@ -252,6 +288,7 @@ async function loadSession($: EngineInterface): Promise<Session> {
     timeoutBufferMs: Number(settings.timeoutBuffer ?? 1000),
     isLongHaul: settings.longHaulMode === true,
     cooldownMs: Math.max(0, Number(settings.longHaulCooldownSeconds ?? DEFAULT_COOLDOWN_SECONDS)) * 1000,
+    stopsRepeatAtExpiry: settings.longHaulStopRepeatAtExpiry === true,
     pool: [],
     queue: [],
     stats: new Map(),
@@ -341,7 +378,7 @@ async function startRound($: EngineInterface) {
   }
   armRound($, round.limitMs)
   await draw($)
-  await playClip($, clipOf(item, session.config, 'shown'))
+  await speakPrompt($, round)
 }
 
 function armRound($: EngineInterface, remainingMs: number) {
@@ -359,6 +396,7 @@ async function answer($: EngineInterface, index: number) {
   const played = round
   const game = session
   clearRoundTimers()
+  repeatTimer?.cancel()
   played.chosen = index
 
   const isCorrect = played.options[index]?.isCorrect === true
@@ -478,6 +516,8 @@ async function thaw($: EngineInterface) {
   round.frozenAt = null
   armRound($, round.limitMs - (now - round.startedAt))
   await draw($)
+  // Long haul's prompt was repeating when the clock stopped, and takes it up again.
+  if (session?.isLongHaul) await speakPrompt($, round)
 }
 
 function armDropIn($: EngineInterface) {

@@ -423,19 +423,53 @@ test('/wep off closes the pane and stays out', async ($, on) => {
   expect(w.opens).toBe(1)
 })
 
-const WORD_CLIP = `${BASE}/api/gameplay/audio/a1b2c3d4e5f60718?token=link-token`
+const WORD_CLIP = `${BASE}/api/gameplay/audio/a1b2c3d4e5f60718?token=link-token&trim=1`
 
-test('a word asked in its own script is spoken as it appears, trimmed, and again on Replay', async ($, on) => {
+test('a word asked in its own script is spoken once as it appears, and again on Replay', async ($, on) => {
   const w = world(on)
   await $.session.start(START)
   await w.clock.advance(2000)
   const pane = await mountPane($)
   await pressText(pane, 'Level 1')
-  expect(w.spawns).toEqual([['ffplay', '-nodisp', '-autoexit', '-loglevel', 'quiet', '-ss', '0.250', '-t', '1.500', WORD_CLIP]])
+  expect(w.spawns).toEqual([['ffplay', '-nodisp', '-autoexit', '-loglevel', 'quiet', WORD_CLIP]])
+  await w.clock.advance(3500)
+  expect(w.spawns.length).toBe(1)
   await pressText(pane, 'Replay')
   expect(w.spawns.length).toBe(2)
   await pressText(pane, 'water')
   expect(w.spawns.length).toBe(2)
+  await pane.unmount()
+})
+
+test('long haul speaks the word again every three seconds until it is answered', async ($, on) => {
+  const w = world(on, { settings: { longHaulMode: true } })
+  await $.session.start(START)
+  await w.clock.advance(2000)
+  const pane = await mountPane($)
+  await pressText(pane, 'Level 1')
+  expect(w.spawns.length).toBe(1)
+  await w.clock.advance(2900)
+  expect(w.spawns.length).toBe(1)
+  await w.clock.advance(200)
+  expect(w.spawns.length).toBe(2)
+  await w.clock.advance(3000)
+  expect(w.spawns.length).toBe(3)
+  await pressText(pane, 'water')
+  await w.clock.advance(9000)
+  expect(w.spawns.length).toBe(3)
+  await pane.unmount()
+})
+
+test('long haul goes quiet past the time limit when the account asks for that', async ($, on) => {
+  const w = world(on, { settings: { longHaulMode: true, longHaulStopRepeatAtExpiry: true } })
+  await $.session.start(START)
+  await w.clock.advance(2000)
+  const pane = await mountPane($)
+  await pressText(pane, 'Level 1')
+  await w.clock.advance(6500)
+  expect(w.spawns.length).toBe(3)
+  await w.clock.advance(20000)
+  expect(w.spawns.length).toBe(3)
   await pane.unmount()
 })
 
