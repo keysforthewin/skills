@@ -86,7 +86,7 @@ function world(
   on('turn.complete', ($, e) => ({ text: e.answer }))
   on('process.run', ($, e) => ({
     value: {
-      exitCode: e.argv[0] === 'ffplay' && !hasFfplay ? 127 : 0,
+      exitCode: e.argv.includes('ffplay') && !hasFfplay ? 127 : 0,
       stdout: '',
       stderr: '',
       isStdoutTruncated: false,
@@ -431,7 +431,7 @@ test('a word asked in its own script is spoken once as it appears, and again on 
   await w.clock.advance(2000)
   const pane = await mountPane($)
   await pressText(pane, 'Level 1')
-  expect(w.spawns).toEqual([['ffplay', '-nodisp', '-autoexit', '-loglevel', 'quiet', WORD_CLIP]])
+  expect(w.spawns).toEqual([['env', 'PULSE_LATENCY_MSEC=250', 'ffplay', '-nodisp', '-autoexit', '-loglevel', 'quiet', WORD_CLIP]])
   await w.clock.advance(3500)
   expect(w.spawns.length).toBe(1)
   await pressText(pane, 'Replay')

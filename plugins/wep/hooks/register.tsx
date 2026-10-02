@@ -23,6 +23,8 @@ const MISS_PAUSE_MS = 3000
 const TICK_MS = 500
 const PAIR_POLL_MS = 2000
 const PLAYER_PROBE_MS = 3000
+// ffplay's own small PulseAudio buffer crackles on WSL's bridge to Windows; a bigger one plays clean.
+const FFPLAY = ['env', 'PULSE_LATENCY_MSEC=250', 'ffplay']
 const PERFECT_SESSION_MIN_ATTEMPTS = 10
 const DEFAULT_COOLDOWN_SECONDS = 30
 // Long haul: a skip this soon after the answer is the answering key, not a request.
@@ -118,8 +120,8 @@ let roundTimers: Timer[] = []
 let pairing: Timer | undefined
 let notice = ''
 let isSoundOn = true
-// Whether ffplay is on this machine, asked once; without it the engine's own player is used.
-let hasFfplay: boolean | undefined
+// How ffplay is started on this machine, asked once; null without it, and the engine's own player is used.
+let ffplay: string[] | null | undefined
 let stopPlaying: (() => void) | undefined
 // Counts every clip started or stopped, so a clip knows whether it ended or was cut off.
 let clipTurn = 0
@@ -168,15 +170,18 @@ async function playClip($: EngineInterface, clip: Clip | null, onEnd?: () => voi
   // trim=1 has the server cut the recording to its in and out points, so both players get the clip alone.
   const url = `${baseUrl}/api/gameplay/audio/${encodeURIComponent(clip.audioKey)}?token=${encodeURIComponent(token)}&trim=1`
   try {
-    if (hasFfplay === undefined) {
-      hasFfplay = await $.process
-        .run(['ffplay', '-version'], { timeoutMs: PLAYER_PROBE_MS })
-        .then(ran => ran.exitCode === 0)
-        .catch(() => false)
+    if (ffplay === undefined) {
+      const runs = (argv: string[]) =>
+        $.process
+          .run([...argv, '-version'], { timeoutMs: PLAYER_PROBE_MS })
+          .then(ran => ran.exitCode === 0)
+          .catch(() => false)
+      // Where there is no `env` to set the buffer with, ffplay is started bare.
+      ffplay = (await runs(FFPLAY)) ? FFPLAY : (await runs(['ffplay'])) ? ['ffplay'] : null
       // Another clip, or a mute, may have come while the machine was asked.
       if (turn !== clipTurn || !isSoundOn) return
     }
-    if (!hasFfplay) {
+    if (!ffplay) {
       // The engine's player has a voice on macOS only.
       const stop = new AbortController()
       stopPlaying = () => stop.abort()
@@ -186,7 +191,7 @@ async function playClip($: EngineInterface, clip: Clip | null, onEnd?: () => voi
       return
     }
     const child = $.process.spawn({
-      argv: ['ffplay', '-nodisp', '-autoexit', '-loglevel', 'quiet', url],
+      argv: [...ffplay, '-nodisp', '-autoexit', '-loglevel', 'quiet', url],
     })
     child.result.catch(() => {})
     // Leaving the stream is what ends the child.
