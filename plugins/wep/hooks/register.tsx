@@ -433,7 +433,7 @@ async function dropIn($: EngineInterface) {
   await thaw($)
 }
 
-async function goAway($: EngineInterface, toast?: string) {
+async function goAway($: EngineInterface) {
   phaseTimer?.cancel()
   const wasUp = phase === 'playing'
   phase = 'idle'
@@ -441,11 +441,7 @@ async function goAway($: EngineInterface, toast?: string) {
   if (!wasUp) return
   await freeze($)
   await $.ui.close({ id: PANE })
-  if (toast) $.ui.toast(toast)
 }
-
-const tally = () =>
-  score.attempts === 0 ? '' : ` · ${score.correct}/${score.attempts} right, streak ${score.streak}`
 
 async function endSession($: EngineInterface) {
   const game = session
@@ -519,6 +515,7 @@ export const register: Register = (on, options) => {
     isOn = (await $.store.get('isOn')) === true
     const saved = await $.store.get('mode')
     mode = MODES.find(entry => entry.mode === saved)?.mode ?? mode
+    armDropIn($)
     await $.command.register({
       name: 'wep',
       description: 'Play Word Exchange Plaza while Claude works',
@@ -570,7 +567,7 @@ export const register: Register = (on, options) => {
     else if (arg === 'menu') await showMenu($)
 
     return {
-      text: 'Word Exchange Plaza is on: it stays open while you work and steps aside when Claude needs you. /wep menu changes mode, /wep hide closes it.',
+      text: 'Word Exchange Plaza is on and stays open until you close it. /wep menu changes mode, /wep hide closes it.',
     }
   })
 
@@ -580,28 +577,11 @@ export const register: Register = (on, options) => {
     return next(e)
   })
 
-  on('turn.complete', async ($, e, next) => {
-    // A subagent finishing is not Claude finishing.
-    if (e.agentId) return next(e)
-    // The pane stays up between turns: closing it here made it flap each time
-    // a background agent woke Claude. Only a turn too short to open it is let go.
-    if (phase === 'waiting') await goAway($)
-    else if (phase === 'playing' && !e.isAborted) $.ui.toast(`Claude's done${tally()}`)
-
-    return next(e)
-  })
-
-  on('tool.check', async ($, e, next) => {
-    const result = await next(e)
-    if (e.tool_use_id && result.decision === 'ask') await goAway($, 'Claude needs you')
-
-    return result
-  })
-
+  // The pane stays up through everything: turns ending, permission prompts,
+  // questions. Nothing tells a plugin reliably when Claude needs the person,
+  // so only the person closes it.
   on('tool.call', async ($, e, next) => {
-    if (e.tool === 'AskUserQuestion') await goAway($, 'Claude needs you')
     const ran = await next(e)
-    // Once an answered prompt lets Claude carry on, drop back in.
     armDropIn($)
 
     return ran

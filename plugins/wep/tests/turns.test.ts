@@ -122,24 +122,13 @@ const pressText = async (pane: Pane, text: string) => {
   await pane.press({ key: String(button?.key) })
 }
 
-test('drops in two seconds after a turn starts, not before', async ($, on) => {
+test('opens two seconds into the session, before any turn', async ($, on) => {
   const w = world(on)
   await $.session.start(START)
-  await $.turn.start(turn)
   await w.clock.advance(1900)
   expect(w.opens).toBe(0)
   await w.clock.advance(200)
   expect(w.opens).toBe(1)
-})
-
-test('a turn that ends within two seconds never opens the pane', async ($, on) => {
-  const w = world(on)
-  await $.session.start(START)
-  await $.turn.start(turn)
-  await w.clock.advance(500)
-  await $.turn.complete(done)
-  await w.clock.advance(5000)
-  expect(w.opens).toBe(0)
 })
 
 test('stays out when switched off or not linked', async ($, on) => {
@@ -167,28 +156,19 @@ test('opens on the menu, and loads nothing until a mode is picked', async ($, on
   await pane.unmount()
 })
 
-test('stays open when Claude finishes, and through the next turn', async ($, on) => {
-  const w = world(on)
+test('stays open when Claude finishes, is interrupted, asks permission or asks a question', async ($, on) => {
+  const w = world(on, { check: 'ask' })
   await $.session.start(START)
   await $.turn.start(turn)
   await w.clock.advance(2100)
+  await $.tool.check({ tool: 'Bash', input: { command: 'rm -rf build' }, tool_use_id: 'tu1' })
+  await $.tool.call({ tool: 'AskUserQuestion', tool_use_id: 'tu2', questions: [] } as never)
   await $.turn.complete(done)
   await w.clock.advance(10_000)
   await $.turn.start({ ...turn, turnId: 't2' })
-  await w.clock.advance(2100)
-  await $.turn.complete({ ...done, turnId: 't2' })
+  await $.turn.complete({ ...done, turnId: 't2', isAborted: true, reason: 'aborted' })
   await w.clock.advance(10_000)
   expect(w.opens).toBe(1)
-  expect(w.closes).toBe(0)
-  expect(w.toasts.some(text => text.startsWith("Claude's done"))).toBe(true)
-})
-
-test('an interrupted turn leaves it open', async ($, on) => {
-  const w = world(on)
-  await $.session.start(START)
-  await $.turn.start(turn)
-  await w.clock.advance(2100)
-  await $.turn.complete({ ...done, isAborted: true, reason: 'aborted' })
   expect(w.closes).toBe(0)
 })
 
@@ -200,28 +180,6 @@ test('keeps playing when a subagent finishes', async ($, on) => {
   await $.turn.complete({ ...done, agentId: 'agent-1' })
   await w.clock.advance(5000)
   expect(w.closes).toBe(0)
-})
-
-test('a permission prompt pulls out, and the answered call drops back in', async ($, on) => {
-  const w = world(on, { check: 'ask' })
-  await $.session.start(START)
-  await $.turn.start(turn)
-  await w.clock.advance(2100)
-  await $.tool.check({ tool: 'Bash', input: { command: 'rm -rf build' }, tool_use_id: 'tu1' })
-  expect(w.closes).toBe(1)
-  expect(w.toasts).toContain('Claude needs you')
-  await $.tool.call({ tool: 'Bash', tool_use_id: 'tu1', command: 'rm -rf build' } as never)
-  await w.clock.advance(2100)
-  expect(w.opens).toBe(2)
-})
-
-test('a question for the person pulls out', async ($, on) => {
-  const w = world(on)
-  await $.session.start(START)
-  await $.turn.start(turn)
-  await w.clock.advance(2100)
-  await $.tool.call({ tool: 'AskUserQuestion', tool_use_id: 'tu2', questions: [] } as never)
-  expect(w.closes).toBe(1)
 })
 
 test('/wep hide closes it across turns until /wep brings it back', async ($, on) => {
@@ -335,19 +293,17 @@ test('the menu button changes mode mid-game', async ($, on) => {
   await pane.unmount()
 })
 
-test('time spent handed back to Claude is not counted against the answer', async ($, on) => {
-  const w = world(on, { check: 'ask' })
+test('time spent hidden is not counted against the answer', async ($, on) => {
+  const w = world(on)
   await $.session.start(START)
-  await $.turn.start(turn)
   await w.clock.advance(2000)
   const first = await mountPane($)
   await pressText(first, 'Level 3')
   await first.unmount()
   await w.clock.advance(1000)
-  await $.tool.check({ tool: 'Bash', input: {}, tool_use_id: 'tu1' })
+  await $.command.run({ command: 'wep', args: 'hide' } as never)
   await w.clock.advance(60_000)
-  await $.tool.call({ tool: 'Bash', tool_use_id: 'tu1', command: 'ls' } as never)
-  await w.clock.advance(2000)
+  await $.command.run({ command: 'wep', args: '' } as never)
   const pane = await mountPane($)
   await w.clock.advance(500)
   await pressText(pane, 'Hello friend')

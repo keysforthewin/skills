@@ -63,13 +63,12 @@ See [`plugins/discernment/SKILL.md`](plugins/discernment/SKILL.md).
 built around reaction time. This plugin plays it as a text game inside Claude
 Code, in the time you would otherwise spend watching a spinner.
 
-- Two seconds into a turn, a pane opens on a menu: Level 1 (Reaction Time),
+- Two seconds into a session, a pane opens on a menu: Level 1 (Reaction Time),
   Level 2 (Fill in the Blank), Level 3 (Full Phrases) or Extinction (a review of
   words you have mastered). Each round shows a prompt and three or four answers.
   Press `1`–`4`; `m` goes back to the menu.
-- The pane stays open between turns. It steps aside only when Claude asks for
-  permission or asks you a question, and comes back once you have answered. The
-  clock stops with it, so that time never counts against your reaction time.
+- The pane stays open the whole time, whatever Claude is doing, until you close
+  it. Press Esc to hand the keyboard back to the prompt.
 - A round that times out is not counted: the answer is shown and the next round
   comes. Only an answer you press is recorded.
 - With long haul switched on in your web settings, a round has no time limit,
