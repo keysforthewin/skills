@@ -25,6 +25,10 @@ const PAIR_POLL_MS = 2000
 const PLAYER_PROBE_MS = 3000
 // ffplay's own small PulseAudio buffer crackles on WSL's bridge to Windows; a bigger one plays clean.
 const FFPLAY = ['env', 'PULSE_LATENCY_MSEC=1000', 'ffplay']
+// The terminal draws Indic script wider than the pane measures it, so a shorter word leaves the end of the
+// last one behind. Each round trails its two prompt lines with blanks unlike the round before's, which
+// makes the pane write over those cells.
+const WIPES = [' '.repeat(24), '\u00a0'.repeat(24)]
 const PERFECT_SESSION_MIN_ATTEMPTS = 10
 const DEFAULT_COOLDOWN_SECONDS = 30
 // Long haul: a skip this soon after the answer is the answering key, not a request.
@@ -116,6 +120,8 @@ let isMenuUp = true
 let phaseTimer: Timer | undefined
 let session: Session | null = null
 let round: Round | null = null
+// Counts the rounds shown, so each one wipes its prompt lines with the other blank.
+let roundCount = 0
 let roundTimers: Timer[] = []
 let pairing: Timer | undefined
 let notice = ''
@@ -247,6 +253,7 @@ async function draw($: EngineInterface) {
     modeLabel: named(session.config.level).sub,
     prompt: prompt.text,
     promptSub: prompt.sub,
+    wipe: WIPES[roundCount % 2]!,
     options: round.options,
     chosen: round.chosen,
     spent: Math.max(0, Math.min(10, Math.floor((elapsed / round.limitMs) * 10))),
@@ -371,6 +378,7 @@ async function startRound($: EngineInterface) {
     return
   }
 
+  roundCount++
   round = {
     item,
     options: buildOptions(item, session.config),
@@ -411,9 +419,8 @@ async function answer($: EngineInterface, index: number) {
   played.settledAt = now
 
   if (index === -1) {
-    // Nobody was looking: the answer is shown, and nothing is counted or recorded.
+    // Nobody was looking: the answer is shown, nothing is counted or recorded, and the game waits for Next.
     await draw($)
-    roundTimers = [$.clock.after(MISS_PAUSE_MS, () => void startRound($))]
     await playClip($, clipOf(played.item, game.config, 'settled'))
 
     return
@@ -475,7 +482,7 @@ async function answer($: EngineInterface, index: number) {
   }
 }
 
-/** The person's skip past an answered round, as long haul's Next. */
+/** The person's skip past a settled round: long haul's Next, and the way on from a timeout. */
 async function skip($: EngineInterface) {
   if (phase !== 'playing' || !round || round.settledAt === null) return
   if ((await $.clock.now()) - round.settledAt < SKIP_GRACE_MS) return
@@ -802,8 +809,14 @@ export const register: Register = (on, options) => {
             streak {shown.score.streak} · {shown.score.correct}/{shown.score.attempts} this session
           </Text>
         </Box>
-        <Text bold>{shown.prompt}</Text>
-        {shown.promptSub !== '' && <Text dimColor>{shown.promptSub}</Text>}
+        <Text bold>
+          {shown.prompt}
+          {shown.wipe}
+        </Text>
+        <Text dimColor>
+          {shown.promptSub}
+          {shown.wipe}
+        </Text>
         <Box flexDirection="column" marginTop={1}>
           {shown.options.map((option, index) =>
             isOpen ? (
@@ -825,7 +838,7 @@ export const register: Register = (on, options) => {
             {shown.notice || (verdict ? verdict + countdown : waiting)}
           </Text>
           <Box>
-            {shown.isLongHaul && verdict !== '' && (
+            {(shown.isLongHaul || shown.chosen === -1) && verdict !== '' && (
               <Button key="next" hotkey="n" plain label="Next  " onPress={() => skip($)} />
             )}
             {shown.canReplay && <Button key="replay" hotkey="r" plain label="Replay  " onPress={() => replay($)} />}

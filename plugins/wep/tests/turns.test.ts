@@ -335,7 +335,7 @@ test('time spent hidden is not counted against the answer', async ($, on) => {
   await pane.unmount()
 })
 
-test('running out of time is not counted or recorded, and the next round comes', async ($, on) => {
+test('running out of time is not counted or recorded, and waits for Next', async ($, on) => {
   const w = world(on)
   await $.session.start(START)
   await $.turn.start(turn)
@@ -345,7 +345,9 @@ test('running out of time is not counted or recorded, and the next round comes',
   await w.clock.advance(10_100)
   expect(w.records.length).toBe(0)
   expect((await buttons(pane)).some(button => button.text?.includes('Hello friend'))).toBe(false)
-  await w.clock.advance(3100)
+  await w.clock.advance(60_000)
+  expect((await buttons(pane)).some(button => button.text?.includes('Hello friend'))).toBe(false)
+  await pressText(pane, 'Next')
   await pressText(pane, 'Hello friend')
   expect(w.records.length).toBe(1)
   expect(w.records[0]?.isCorrect).toBe(true)

@@ -35,6 +35,8 @@ export type WepView =
       modeLabel: string
       prompt: string
       promptSub: string
+      /** Blanks trailing both prompt lines, different each round, so the last word is written over. */
+      wipe: string
       options: WepOption[]
       /** The option pressed, -1 for a timeout, null while the round is open. */
       chosen: number | null
