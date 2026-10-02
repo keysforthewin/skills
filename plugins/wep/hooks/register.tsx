@@ -148,7 +148,8 @@ async function playClip($: EngineInterface, clip: Clip | null) {
   if (!clip || !isSoundOn || !token) return
   stopClip()
   // The token rides in the URL because it is the one form both players can send.
-  const url = `${baseUrl}/api/gameplay/audio/${encodeURIComponent(clip.audioKey)}?token=${encodeURIComponent(token)}`
+  // trim=1 has the server cut the recording to its in and out points, so both players get the clip alone.
+  const url = `${baseUrl}/api/gameplay/audio/${encodeURIComponent(clip.audioKey)}?token=${encodeURIComponent(token)}&trim=1`
   try {
     if (hasFfplay === undefined) {
       hasFfplay = await $.process
@@ -159,17 +160,15 @@ async function playClip($: EngineInterface, clip: Clip | null) {
       if (stopPlaying || !isSoundOn) return
     }
     if (!hasFfplay) {
-      // The engine's player has a voice on macOS only, and plays the recording untrimmed.
+      // The engine's player has a voice on macOS only.
       const stop = new AbortController()
       stopPlaying = () => stop.abort()
       void $.audio.play({ url }, { signal: stop.signal }).catch(() => {})
 
       return
     }
-    const from = clip.startSeconds > 0 ? ['-ss', clip.startSeconds.toFixed(3)] : []
-    const length = clip.endSeconds > clip.startSeconds ? ['-t', (clip.endSeconds - clip.startSeconds).toFixed(3)] : []
     const child = $.process.spawn({
-      argv: ['ffplay', '-nodisp', '-autoexit', '-loglevel', 'quiet', ...from, ...length, url],
+      argv: ['ffplay', '-nodisp', '-autoexit', '-loglevel', 'quiet', url],
     })
     child.result.catch(() => {})
     // Leaving the stream is what ends the child.
