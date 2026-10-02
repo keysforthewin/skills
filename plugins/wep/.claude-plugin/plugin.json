@@ -1,7 +1,7 @@
 {
   "name": "wep",
   "displayName": "Word Exchange Plaza",
-  "version": "0.4.2",
+  "version": "0.4.3",
   "description": "Play Word Exchange Plaza's levels as a text game beside Claude while it works",
   "author": {
     "name": "keysforthewin"
