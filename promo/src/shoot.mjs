@@ -1,16 +1,19 @@
 // node shoot.mjs still 2 7 14 ...   -> stills/t.png
 // node shoot.mjs video               -> pipes every frame to ffmpeg
+// PAGE=short OUT=wep-promo-short node shoot.mjs video   -> the short cut, from short.html
 import { chromium } from 'playwright-core'
 import { spawn } from 'node:child_process'
 import { mkdirSync } from 'node:fs'
 import os from 'node:os'
 
 const here = new URL('.', import.meta.url).pathname
+const pageName = process.env.PAGE || 'video'
+const outName = process.env.OUT || 'wep-promo'
 const browser = await chromium.launch({
   executablePath: `${os.homedir()}/.cache/ms-playwright/chromium-1243/chrome-linux64/chrome`,
 })
 const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } })
-await page.goto(`file://${here}video.html`)
+await page.goto(`file://${here}${pageName}.html`)
 await page.evaluate(() => document.fonts.ready)
 await page.waitForTimeout(800)
 
@@ -25,7 +28,7 @@ if (mode === 'still') {
   const FPS = 30
   const duration = await page.evaluate(() => window.DURATION)
   const ff = spawn('ffmpeg', ['-y', '-f', 'image2pipe', '-framerate', String(FPS), '-c:v', 'mjpeg', '-i', '-',
-    '-c:v', 'libx264', '-preset', 'slow', '-crf', '17', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', `${here}wep-promo.mp4`],
+    '-c:v', 'libx264', '-preset', 'slow', '-crf', '17', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', `${here}${outName}.mp4`],
     { stdio: ['pipe', 'ignore', 'inherit'] })
   const total = Math.round(duration * FPS)
   for (let i = 0; i < total; i++) {

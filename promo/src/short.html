@@ -1,0 +1,394 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,600;12..96,800&family=JetBrains+Mono:ital,wght@0,400;0,700;1,400&family=Noto+Sans+Devanagari:wght@400;700&family=Tiro+Devanagari+Hindi&display=block" rel="stylesheet">
+<style>
+:root {
+  --bg: #0d0f14; --panel: #14161d; --line: #262a36; --ink: #efe9dc; --dim: #8d8f9b;
+  --saffron: #ffb347; --coral: #e58a6b; --mint: #8fe0b0;
+  --fs: 21px; --cw: 12.6px; --lh: 28px;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { width: 1920px; height: 1080px; overflow: hidden; background: var(--bg); }
+#stage { position: relative; width: 1920px; height: 1080px; overflow: hidden; color: var(--ink);
+  font-family: 'Bricolage Grotesque', sans-serif;
+  background: radial-gradient(1200px 700px at 30% 20%, #1b1f2b 0%, transparent 60%),
+              radial-gradient(900px 600px at 85% 90%, #23180f 0%, transparent 60%), var(--bg); }
+#dots { position: absolute; inset: 0; opacity: .5;
+  background-image: radial-gradient(#ffffff12 1.2px, transparent 1.2px); background-size: 36px 36px; }
+.glyph { position: absolute; font-family: 'Tiro Devanagari Hindi', serif; color: var(--saffron); will-change: transform; }
+.scene { position: absolute; inset: 0; }
+.mono { font-family: 'JetBrains Mono', monospace; }
+.head { position: absolute; left: 100px; top: 84px; font-size: 100px; font-weight: 800; letter-spacing: -3px; }
+.head em { font-style: normal; color: var(--saffron); }
+.tag { position: absolute; font-family: 'JetBrains Mono', monospace; font-size: 20px; letter-spacing: 3px; text-transform: uppercase; color: var(--dim); }
+.tag b { color: var(--mint); font-weight: 400; }
+
+/* title */
+#title { position: absolute; left: 0; right: 0; top: 330px; text-align: center; font-size: 168px; font-weight: 800; letter-spacing: -6px; line-height: 1; }
+#title span { display: inline-block; white-space: pre; }
+#titleSub { position: absolute; left: 0; right: 0; top: 560px; text-align: center; font-size: 46px; color: var(--dim); }
+#titleSub em { font-style: normal; color: var(--coral); }
+#titleChip { position: absolute; left: 50%; top: 235px; font-size: 24px; letter-spacing: 4px;
+  text-transform: uppercase; color: var(--saffron); border: 1.5px solid #ffb34766; border-radius: 99px; padding: 10px 26px; }
+#titleRule { position: absolute; left: 50%; top: 525px; height: 4px; background: var(--saffron); border-radius: 2px; }
+
+/* terminal */
+#win { position: absolute; left: 78px; top: 58px; width: 1312px; border-radius: 16px; background: var(--panel);
+  border: 1px solid var(--line); box-shadow: 0 40px 120px #000b, 0 0 0 1px #ffffff08 inset; transform-origin: 50% 50%; }
+#bar { height: 46px; display: flex; align-items: center; gap: 9px; padding: 0 18px; border-bottom: 1px solid var(--line); }
+#bar i { width: 13px; height: 13px; border-radius: 50%; background: #3a3f4f; display: block; }
+#bar span { flex: 1; text-align: center; margin-right: 60px; font-family: 'JetBrains Mono', monospace; font-size: 16px; color: var(--dim); }
+.term { position: relative; width: 1260px; font-family: 'JetBrains Mono', 'Noto Sans Devanagari', monospace;
+  font-size: var(--fs); color: #d3d0c6; font-variant-ligatures: none; }
+#term { margin: 24px 26px 28px; height: 840px; }
+.r { height: var(--lh); line-height: var(--lh); white-space: pre; }
+.vb { display: inline-block; transform: scaleY(1.45); }
+.dv { display: inline-block; white-space: pre; font-family: 'Noto Sans Devanagari', sans-serif; vertical-align: top; height: var(--lh); line-height: var(--lh); }
+.hl { position: absolute; border: 2px solid var(--saffron); border-radius: 10px;
+  box-shadow: 0 0 0 5px #ffb3471f, 0 0 44px #ffb34740; pointer-events: none; }
+#hl { left: -12px; width: 1284px; }
+#real { position: absolute; left: 78px; top: 1020px; font-size: 19px; color: var(--dim); letter-spacing: .5px; }
+#real b { color: var(--mint); font-weight: 600; }
+#cap { position: absolute; left: 1466px; top: 230px; width: 410px; }
+#capH { font-size: 60px; font-weight: 800; line-height: 1.02; letter-spacing: -1.5px; }
+#capP { font-size: 29px; line-height: 1.32; color: var(--dim); margin-top: 22px; }
+#capBar { width: 64px; height: 5px; background: var(--saffron); border-radius: 3px; margin-top: 30px; }
+.key { position: absolute; display: flex; align-items: center; gap: 22px; }
+.keycap { width: 112px; height: 112px; border-radius: 20px; background: linear-gradient(#2b3040, #1c202b); border: 1.5px solid #454b60;
+  box-shadow: 0 9px 0 #0a0b10, 0 18px 40px #000a; display: flex; align-items: center; justify-content: center;
+  font-family: 'JetBrains Mono', monospace; font-size: 58px; font-weight: 700; color: var(--ink); }
+.keyLbl { font-size: 26px; color: var(--dim); line-height: 1.25; width: 250px; }
+#keyB { left: 1466px; top: 720px; }
+
+/* a pane cut out of the captured terminal */
+.crop { position: absolute; padding: 22px 26px; border-radius: 16px; background: var(--panel); border: 1px solid var(--line);
+  box-shadow: 0 40px 120px #000b, 0 0 0 1px #ffffff08 inset; transform-origin: 0 0; }
+
+/* sound */
+#cropC { left: 100px; top: 300px; }
+#hlR { left: 998px; width: 134px; height: 34px; }
+#say { position: absolute; left: 1414px; width: 506px; top: 300px; height: 324px; }
+#say .ring { position: absolute; left: 50%; top: 138px; width: 200px; height: 200px; margin: -100px 0 0 -100px; border-radius: 50%; border: 3px solid var(--saffron); }
+#sayG { position: absolute; left: 0; right: 0; top: 10px; text-align: center; font-family: 'Tiro Devanagari Hindi', serif; font-size: 190px; line-height: 250px; color: var(--saffron); }
+#sayR { position: absolute; left: 0; right: 0; top: 262px; text-align: center; font-family: 'JetBrains Mono', monospace; font-size: 34px; color: var(--ink); letter-spacing: 2px; }
+#wave { position: absolute; left: 100px; top: 676px; width: 1314px; height: 180px; display: flex; align-items: center; justify-content: space-between; }
+#wave i { display: block; width: 8px; border-radius: 4px; background: #2f3443; }
+#keyC { left: 1500px; top: 710px; }
+#subC { position: absolute; left: 100px; top: 912px; font-size: 36px; color: var(--dim); }
+#subC em { font-style: normal; color: var(--ink); }
+
+/* account */
+#tagL { left: 100px; top: 310px; }
+#cropD { left: 100px; top: 356px; }
+#tagR { left: 1236px; top: 310px; }
+#acct { position: absolute; left: 1236px; top: 356px; width: 584px; height: 240px; border-radius: 22px; background: var(--panel);
+  border: 1.5px solid var(--line); padding: 30px 40px; display: flex; gap: 48px; align-items: center; }
+#acct .n { font-size: 140px; font-weight: 800; line-height: 1; letter-spacing: -6px; color: var(--saffron); display: inline-block; transform-origin: 50% 80%; }
+#acct .l { font-size: 21px; color: var(--dim); letter-spacing: 2.5px; text-transform: uppercase; margin-top: 4px; }
+#acct .n.small { font-size: 84px; letter-spacing: -3px; color: var(--ink); }
+#wire { position: absolute; left: 1086px; top: 474px; width: 136px; height: 4px; border-radius: 2px;
+  background: repeating-linear-gradient(90deg, #3a3f4f 0 10px, transparent 10px 20px); }
+#spark { position: absolute; left: 1086px; top: 465px; width: 22px; height: 22px; border-radius: 50%; background: var(--saffron); box-shadow: 0 0 30px #ffb347; }
+.fact { position: absolute; top: 740px; width: 520px; font-size: 32px; line-height: 1.3; color: var(--ink); padding-left: 26px; border-left: 4px solid var(--coral); }
+.fact small { display: block; font-size: 25px; color: var(--dim); margin-top: 8px; }
+
+/* cta */
+#ctaH { position: absolute; left: 0; right: 0; top: 130px; text-align: center; font-size: 104px; font-weight: 800; letter-spacing: -3px; }
+#ctaH em { font-style: normal; color: var(--saffron); }
+#ctaBox { position: absolute; left: 360px; top: 330px; width: 1200px; border-radius: 18px; background: var(--panel); border: 1px solid var(--line); padding: 40px 48px; font-family: 'JetBrains Mono', monospace; font-size: 37px; line-height: 1.75; box-shadow: 0 40px 120px #000b; }
+#ctaBox .ln { white-space: pre; height: 65px; }
+#ctaBox .pr { color: var(--coral); }
+#ctaBox .cm { color: var(--dim); font-size: 26px; }
+#ctaUrl { position: absolute; left: 0; right: 0; top: 800px; text-align: center; font-size: 52px; font-weight: 600; }
+#ctaUrl em { font-style: normal; color: var(--saffron); }
+#ctaGh { position: absolute; left: 0; right: 0; top: 890px; text-align: center; font-size: 30px; color: var(--dim); font-family: 'JetBrains Mono', monospace; }
+#ctaReq { position: absolute; left: 0; right: 0; top: 965px; text-align: center; font-size: 22px; color: #6d6f7b; }
+</style>
+</head>
+<body>
+<div id="stage">
+  <div id="dots"></div>
+  <div id="glyphs"></div>
+
+  <div class="scene" id="A">
+    <div id="titleChip">Now with sound</div>
+    <div id="title"></div>
+    <div id="titleRule"></div>
+    <div id="titleSub">Learn a language <em>while Claude codes.</em></div>
+  </div>
+
+  <div class="scene" id="B">
+    <div id="win">
+      <div id="bar"><i></i><i></i><i></i><span>claude — todo-cli</span></div>
+      <div class="term" id="term"><div id="screen"></div><div class="hl" id="hl"></div></div>
+    </div>
+    <div id="real"><b>●</b> Real session, captured from the terminal</div>
+    <div id="cap"><div id="capH"></div><div id="capP"></div><div id="capBar"></div></div>
+    <div class="key" id="keyB"><div class="keycap"></div><div class="keyLbl"></div></div>
+  </div>
+
+  <div class="scene" id="C">
+    <div class="head" id="headC">Hear <em>every word.</em></div>
+    <div class="crop" id="cropC"><div class="term"><div id="paneC"></div><div class="hl" id="hlR"></div></div></div>
+    <div id="say"><div class="ring"></div><div class="ring"></div><div class="ring"></div><div id="sayG">त्थ</div><div id="sayR">ttha</div></div>
+    <div id="wave"></div>
+    <div class="key" id="keyC"><div class="keycap"></div><div class="keyLbl"></div></div>
+    <div id="subC">Each letter, word and phrase is spoken aloud, <em>as it is on the web.</em></div>
+  </div>
+
+  <div class="scene" id="D">
+    <div class="head" id="headD">It counts on <em>your account.</em></div>
+    <div class="tag" id="tagL"><b>●</b> In your terminal</div>
+    <div class="crop" id="cropD"><div class="term"><div id="paneD"></div></div></div>
+    <div id="wire"></div><div id="spark"></div>
+    <div class="tag" id="tagR">Word Exchange Plaza · your account</div>
+    <div id="acct">
+      <div><div class="n" id="acctStreak"></div><div class="l">streak</div></div>
+      <div><div class="n small" id="acctDone"></div><div class="l">answers recorded</div></div>
+    </div>
+    <div class="fact" style="left:100px">Link once with /wep.<small>Approve the code in your browser.</small></div>
+    <div class="fact" style="left:690px">Every answer is recorded.<small>The same as playing on the web.</small></div>
+    <div class="fact" style="left:1280px">Progress while you code.<small>Your streak climbs between prompts.</small></div>
+  </div>
+
+  <div class="scene" id="E">
+    <div id="ctaH">Play it <em>today.</em></div>
+    <div id="ctaBox">
+      <div class="ln" id="c1"></div>
+      <div class="ln" id="c2"></div>
+      <div class="ln" id="c3"></div>
+    </div>
+    <div id="ctaUrl"><em>wordexchangeplaza.com</em></div>
+    <div id="ctaGh">github.com/keysforthewin/skills</div>
+    <div id="ctaReq">Needs Claude Code 2.1.287 or later and a Word Exchange Plaza account · sound needs ffplay on Linux and WSL</div>
+  </div>
+</div>
+
+<script src="frames.js"></script>
+<script>
+const $ = id => document.getElementById(id)
+const clamp = (x, a = 0, b = 1) => Math.min(b, Math.max(a, x))
+const lerp = (a, b, k) => a + (b - a) * k
+const out = k => 1 - Math.pow(1 - clamp(k), 3)
+const inOut = k => { k = clamp(k); return k < .5 ? 4 * k * k * k : 1 - Math.pow(-2 * k + 2, 3) / 2 }
+const back = k => { k = clamp(k); const c = 1.9; return 1 + (c + 1) * Math.pow(k - 1, 3) + c * Math.pow(k - 1, 2) }
+const p = (t, at, dur) => clamp((t - at) / dur)
+// 0 before `a`, 1 between, 0 after `b`
+const win = (t, a, b, fi = .45, fo = .45) => Math.min(out(p(t, a, fi)), 1 - out(p(t, b - fo, fo)))
+const show = (el, o, y = 0, s = 1) => { el.style.opacity = o; el.style.transform = `translateY(${y}px) scale(${s})` }
+
+const T = { A: 0, B: 3.0, C: 10.2, D: 15.6, E: 21.2, END: 26.0 }
+window.DURATION = T.END
+
+// ---- background glyphs
+const GLYPHS = ['अ', 'क', 'ह', 'न', 'म', 'त्थ', 'दि', 'घ', 'स', 'आ', 'ल', 'र', 'प', 'हूँ']
+const glyphEls = GLYPHS.map((g, i) => {
+  const el = document.createElement('div'); el.className = 'glyph'; el.textContent = g
+  el._x = (i * 397) % 1820 + 30; el._y = (i * 613) % 1080; el._s = 90 + (i * 53) % 170; el._v = 9 + (i * 7) % 14
+  el.style.fontSize = el._s + 'px'; el.style.left = el._x + 'px'
+  $('glyphs').appendChild(el); return el
+})
+
+// ---- title letters
+const titleEls = [...'Word Exchange Plaza'].map(ch => {
+  const s = document.createElement('span'); s.textContent = ch; $('title').appendChild(s); return s
+})
+
+// ---- captured frames
+const LH = 28
+function frameAt(src) {
+  let lo = 0, hi = FRAMES.length - 1
+  while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (FRAMES[mid].t <= src) lo = mid; else hi = mid - 1 }
+  return lo
+}
+const rowsOf = f => f.h.split('<div class="r">').slice(1).map(r => '<div class="r">' + r)
+const paneOf = f => rowsOf(f).slice(f.top, f.bot + 1).join('')
+// "streak 4 · 3/3 this session", as the pane's own header says it
+const scoreOf = f => {
+  const m = /streak (\d+) · (\d+)\/\d+/.exec(f.h.replace(/<[^>]+>/g, ''))
+  return m ? { streak: +m[1], done: +m[2] } : null
+}
+const shown = {}
+function paint(id, fi, html) { if (shown[id] !== fi) { $(id).innerHTML = html(FRAMES[fi]); shown[id] = fi } }
+// a keycap that dips when its key was pressed `age` seconds ago
+function press(el, age, key, label, fade = 1) {
+  if (age < -.05 || age > 1.25) { el.style.opacity = 0; return }
+  const cap = el.firstElementChild
+  cap.textContent = key; el.lastElementChild.textContent = label
+  const dip = age < .12 ? lerp(0, 9, age / .12) : lerp(9, 0, out(p(age, .12, .3)))
+  el.style.opacity = Math.min(out(p(age, -.05, .12)), 1 - out(p(age, .95, .3))) * fade
+  cap.style.transform = `translateY(${dip}px)`
+  cap.style.boxShadow = `0 ${9 - dip}px 0 #0a0b10, 0 18px 40px #000a, 0 0 ${age < .5 ? 40 : 0}px #ffb34755`
+  cap.style.borderColor = age < .5 ? '#ffb347' : '#454b60'
+}
+
+// ---- B: real captured time (s0..s1) played over d video seconds
+const SEGS = [
+  { s0: 14.86, s1: 22.68, d: 3.4, hl: 'pane', h: 'Practise while you wait.', t: 'A phrase, four answers, one keypress, in a pane under Claude.' },
+  { s0: 22.68, s1: 30.88, d: 3.4, hl: 'spin', h: 'Claude keeps working.', t: 'Your score rides along on the spinner.' },
+]
+const B0 = T.B + 0.4
+let acc = B0
+for (const s of SEGS) { s.v0 = acc; acc += s.d; s.v1 = acc }
+// real keypresses, at the captured time they were made
+const KEYS = [[14.8, '3', 'Level 3 · Full Phrases'], [20.5, '3', 'answer'], [22.6, 'n', 'next round'], [28.85, '2', 'answer'], [30.8, 'n', 'next round']]
+  .map(([s, k, l]) => {
+    const seg = SEGS.find(x => s >= x.s0 - .2 && s <= x.s1 + .01)
+    return { v: seg.v0 + clamp((s - seg.s0) / (seg.s1 - seg.s0)) * seg.d, k, l }
+  })
+
+// ---- C: the letter is answered at 58.3 captured, and spoken then
+const C = { s0: 56.4, s1: 61.3, d: T.D - T.C }
+const C_ANSWER = (58.3 - C.s0) / (C.s1 - C.s0) * C.d, C_REPLAY = C_ANSWER + 1.75, CLIP = 1.05
+const BARS = 96
+const barEls = Array.from({ length: BARS }, (_, i) => {
+  const el = document.createElement('i')
+  const k = i / (BARS - 1), env = Math.pow(Math.sin(Math.PI * k), .6)
+  el._a = (.18 + .82 * Math.abs(Math.sin(i * .71) * Math.sin(i * .233 + 1.1) + .35 * Math.sin(i * 1.9))) * env
+  $('wave').appendChild(el); return el
+})
+const ringEls = [...document.querySelectorAll('#say .ring')]
+
+// ---- D: two answers land while Claude works
+// ---- D: two answers land while Claude works, with the thinking between them cut
+const D_CUTS = [{ s0: 27.6, s1: 31.2, d: 2.6 }, { s0: 34.9, s1: 38.5, d: T.E - T.D - 2.6 }]
+const dFrame = d => {
+  const [first, second] = D_CUTS, cut = d < first.d ? first : second
+  return FRAMES[frameAt(lerp(cut.s0, cut.s1, clamp((d - (cut === first ? 0 : first.d)) / cut.d)))]
+}
+const D_HITS = []
+for (let d = 1 / 30; d < T.E - T.D; d += 1 / 30) if (scoreOf(dFrame(d)).done > scoreOf(dFrame(d - 1 / 30)).done) D_HITS.push(d)
+const factEls = [...document.querySelectorAll('.fact')]
+
+const CMDS = ['/plugin marketplace add keysforthewin/skills', '/plugin install wep@keysforthewin', '/wep']
+const NOTES = ['', '', '   link your account, then play']
+
+window.seek = function (t) {
+  // background
+  for (const el of glyphEls) {
+    const y = ((el._y - t * el._v) % 1300 + 1300) % 1300 - 200
+    el.style.transform = `translateY(${y}px) rotate(${Math.sin(t * .2 + el._x) * 6}deg)`
+    el.style.opacity = t > T.B && t < T.E ? 0.022 : 0.055
+  }
+
+  // A: title
+  const a = t - T.A
+  $('A').style.display = t < T.B + .5 ? '' : 'none'
+  $('A').style.opacity = Math.min(out(p(a, 0, .4)), 1 - out(p(t, T.B - .1, .5)))
+  titleEls.forEach((el, i) => {
+    const k = back(p(a, .15 + i * .03, .5))
+    el.style.opacity = clamp(p(a, .15 + i * .03, .25)); el.style.transform = `translateY(${lerp(80, 0, k)}px)`
+  })
+  show($('titleChip'), out(p(a, .0, .5)), lerp(-16, 0, out(p(a, 0, .5))))
+  $('titleChip').style.transform = 'translateX(-50%) ' + $('titleChip').style.transform
+  const rw = lerp(0, 220, inOut(p(a, .8, .6)))
+  $('titleRule').style.width = rw + 'px'; $('titleRule').style.marginLeft = -rw / 2 + 'px'
+  show($('titleSub'), out(p(a, 1.0, .5)), lerp(26, 0, out(p(a, 1.0, .5))))
+  $('A').style.transform = `scale(${lerp(1, 1.04, p(a, 0, 3.2))})`
+
+  // B: terminal
+  const bOn = t >= T.B - .1 && t < T.C + .5
+  $('B').style.display = bOn ? '' : 'none'
+  if (bOn) {
+    const enter = out(p(t, T.B, .7)), exit = out(p(t, T.C - .1, .5))
+    $('win').style.opacity = enter * (1 - exit)
+    $('win').style.transform = `translateY(${lerp(120, 0, enter) - 60 * exit}px) scale(${lerp(.94, 1, enter)})`
+    $('real').style.opacity = out(p(t, T.B + .7, .5)) * (1 - exit)
+    const seg = SEGS.find(s => t < s.v1) || SEGS[SEGS.length - 1]
+    const fi = frameAt(lerp(seg.s0, seg.s1 - .02, clamp((t - seg.v0) / seg.d)))
+    paint('screen', fi, f => f.h)
+    const f = FRAMES[fi]
+    let top = null, rows = 1
+    if (seg.hl === 'spin' && f.spin != null) top = f.spin
+    else if (seg.hl === 'pane' && f.top != null && f.bot != null) { top = f.top; rows = f.bot - f.top + 1 }
+    const hl = $('hl')
+    hl.style.opacity = (top != null ? win(t, seg.v0 + .4, seg.v1 + .05, .35, .3) : 0) * (1 - exit)
+    if (top != null) { hl.style.top = top * LH + 'px'; hl.style.height = rows * LH + 'px' }
+    $('capH').textContent = seg.h; $('capP').textContent = seg.t
+    show($('cap'), t < B0 ? 0 : win(t, seg.v0 + .05, seg.v1 + .02, .4, .25) * (1 - exit), lerp(24, 0, out(p(t, seg.v0 + .05, .4))))
+    const key = KEYS.filter(x => t >= x.v - .05).pop()
+    press($('keyB'), key ? t - key.v : 99, key && key.k, key && key.l, 1 - exit)
+  }
+
+  // C: sound
+  const c = t - T.C
+  const cOn = t >= T.C && t < T.D + .5
+  $('C').style.display = cOn ? '' : 'none'
+  if (cOn) {
+    $('C').style.opacity = 1 - out(p(t, T.D - .1, .5))
+    show($('headC'), out(p(c, .25, .5)), lerp(30, 0, out(p(c, .25, .5))))
+    show($('cropC'), out(p(c, .45, .6)), lerp(70, 0, back(p(c, .45, .6))))
+    paint('paneC', frameAt(lerp(C.s0, C.s1, clamp(c / C.d))), paneOf)
+    // how far through the clip each playing is, or -1 between them
+    const plays = [C_ANSWER, C_REPLAY].map(at => c >= at && c < at + CLIP ? (c - at) / CLIP : -1)
+    const head = Math.max(...plays), heard = c >= C_ANSWER
+    barEls.forEach((el, i) => {
+      const k = i / (BARS - 1), near = head >= 0 ? Math.max(0, 1 - Math.abs(k - head) * 9) : 0
+      const grow = out(p(c, .7 + k * .5, .5))
+      el.style.height = Math.max(8, 172 * el._a * grow * (1 + .28 * near * Math.sin(c * 60 + i))) + 'px'
+      el.style.background = head >= 0 && k <= head ? '#ffb347' : heard ? '#6b5231' : '#2f3443'
+      el.style.boxShadow = near > .3 ? '0 0 18px #ffb34788' : ''
+    })
+    ringEls.forEach((el, i) => {
+      const k = head >= 0 ? (head * 2.2 + i / 3) % 1 : 0
+      el.style.opacity = head >= 0 ? (1 - k) * .55 * Math.min(1, head * 8, (1 - head) * 5) : 0
+      el.style.transform = `scale(${lerp(.7, 2.3, k)})`
+    })
+    const pop = out(p(c, .8, .5)), beat = head >= 0 ? 1 + .05 * Math.sin(head * Math.PI) : 1
+    show($('sayG'), pop * (heard ? 1 : .35), 0, lerp(.8, 1, back(p(c, .8, .5))) * beat)
+    show($('sayR'), out(p(c, C_ANSWER, .35)), lerp(14, 0, out(p(c, C_ANSWER, .35))))
+    const replay = c >= C_REPLAY - .05
+    press($('keyC'), replay ? c - C_REPLAY : c - C_ANSWER, replay ? 'r' : '2', replay ? 'say it again' : 'answer, then hear it')
+    $('hlR').style.top = 8 * LH - 3 + 'px'
+    $('hlR').style.opacity = win(c, C_REPLAY - .1, C_REPLAY + 1.5, .25, .3)
+    show($('subC'), out(p(c, 1.2, .6)), lerp(22, 0, out(p(c, 1.2, .6))))
+  }
+
+  // D: account
+  const d = t - T.D
+  const dOn = t >= T.D && t < T.E + .5
+  $('D').style.display = dOn ? '' : 'none'
+  if (dOn) {
+    $('D').style.opacity = 1 - out(p(t, T.E - .1, .5))
+    show($('headD'), out(p(d, .25, .5)), lerp(30, 0, out(p(d, .25, .5))))
+    paint('paneD', FRAMES.indexOf(dFrame(d)), paneOf)
+    const inL = out(p(d, .45, .6)), inR = out(p(d, .65, .6))
+    $('cropD').style.opacity = inL; $('cropD').style.transform = `translateY(${lerp(60, 0, inL)}px) scale(.74)`
+    $('tagL').style.opacity = inL; $('tagR').style.opacity = inR; $('wire').style.opacity = inR
+    // the account only shows an answer once it has crossed the wire
+    const TRAVEL = .45
+    const landed = D_HITS.filter(h => d >= h + TRAVEL).length, flying = D_HITS.find(h => d >= h && d < h + TRAVEL)
+    const start = scoreOf(dFrame(0))
+    $('acctStreak').textContent = start.streak + landed; $('acctDone').textContent = start.done + landed
+    const since = landed ? d - (D_HITS[landed - 1] + TRAVEL) : 99, bump = 1 + .22 * (1 - out(p(since, 0, .5)))
+    $('acctStreak').style.transform = `scale(${bump})`
+    show($('acct'), inR, lerp(60, 0, inR))
+    $('acct').style.borderColor = since < .6 ? `rgba(255,179,71,${1 - p(since, 0, .6)})` : ''
+    $('acct').style.boxShadow = since < .6 ? `0 0 ${60 * (1 - p(since, 0, .6))}px #ffb34755` : ''
+    $('spark').style.opacity = flying != null ? 1 : 0
+    if (flying != null) $('spark').style.transform = `translateX(${inOut((d - flying) / TRAVEL) * 124}px)`
+    factEls.forEach((el, i) => show(el, out(p(d, 1.3 + i * .3, .6)), lerp(26, 0, out(p(d, 1.3 + i * .3, .6)))))
+  }
+
+  // E: cta
+  const e = t - T.E
+  $('E').style.display = t >= T.E ? '' : 'none'
+  show($('ctaH'), out(p(e, .2, .5)), lerp(34, 0, out(p(e, .2, .5))))
+  show($('ctaBox'), out(p(e, .4, .55)), lerp(50, 0, out(p(e, .4, .55))))
+  CMDS.forEach((cmd, i) => {
+    const start = .8 + i * .7, n = Math.floor(clamp((e - start) / .55) * cmd.length)
+    const cur = e >= start && n < cmd.length || (i === CMDS.length - 1 && e >= start && Math.floor(e * 2.2) % 2 === 0)
+    const note = n === cmd.length && NOTES[i] ? `<span class="cm">${NOTES[i]}</span>` : ''
+    $('c' + (i + 1)).innerHTML = e >= start - .25 ? `<span class="pr">❯ </span>${cmd.slice(0, n)}<span style="opacity:${cur ? 1 : 0}">▌</span>${note}` : ''
+  })
+  show($('ctaUrl'), out(p(e, 2.7, .5)), lerp(24, 0, out(p(e, 2.7, .5))))
+  show($('ctaGh'), out(p(e, 3.0, .5)), lerp(18, 0, out(p(e, 3.0, .5))))
+  show($('ctaReq'), out(p(e, 3.3, .5)) * .9, 0)
+  $('stage').style.filter = t > T.END - .5 ? `brightness(${1 - out(p(t, T.END - .5, .5))})` : ''
+}
+seek(+new URLSearchParams(location.search).get('t') || 0)
+</script>
+</body>
+</html>
