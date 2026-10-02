@@ -46,6 +46,8 @@ export type WepView =
       /** Long haul: seconds until the next round, null when none is counting down. */
       nextInSeconds: number | null
       score: WepScore
+      /** Whether the round has something to say again: sound is on and its clip may be heard now. */
+      canReplay: boolean
       /** What the hand-back says over a frozen round ('' while playing). */
       notice: string
     }

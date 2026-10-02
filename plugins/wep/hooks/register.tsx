@@ -3,6 +3,7 @@ import type { EngineInterface, Register, Timer } from 'claude-code'
 
 import {
   buildOptions,
+  clipOf,
   defaultQ3Ms,
   isPlayable,
   promptOf,
@@ -11,7 +12,7 @@ import {
   timeLimitMs,
   withSample,
 } from '../lib/game'
-import type { GameConfig, Item, ItemStats, Mode } from '../lib/game'
+import type { Clip, GameConfig, Item, ItemStats, Mode } from '../lib/game'
 import type { WepOption, WepScore, WepView } from '../types'
 
 const PANE = 'wep'
@@ -21,6 +22,7 @@ const CORRECT_PAUSE_MS = 1200
 const MISS_PAUSE_MS = 3000
 const TICK_MS = 500
 const PAIR_POLL_MS = 2000
+const PLAYER_PROBE_MS = 3000
 const PERFECT_SESSION_MIN_ATTEMPTS = 10
 const DEFAULT_COOLDOWN_SECONDS = 30
 // Long haul: a skip this soon after the answer is the answering key, not a request.
@@ -111,6 +113,10 @@ let round: Round | null = null
 let roundTimers: Timer[] = []
 let pairing: Timer | undefined
 let notice = ''
+let isSoundOn = true
+// Whether ffplay is on this machine, asked once; without it the engine's own player is used.
+let hasFfplay: boolean | undefined
+let stopPlaying: (() => void) | undefined
 const score: WepScore = { correct: 0, attempts: 0, streak: 0, points: 0 }
 
 async function api($: EngineInterface, method: string, path: string, body?: unknown, auth = true) {
@@ -132,6 +138,64 @@ const showMessage = ($: EngineInterface, ...lines: string[]) =>
 
 const named = (of: Mode) => MODES.find(entry => entry.mode === of) ?? MODES[2]!
 
+function stopClip() {
+  stopPlaying?.()
+  stopPlaying = undefined
+}
+
+/** Starts the clip over whatever was playing. Sound is a bonus: a clip that cannot play is skipped. */
+async function playClip($: EngineInterface, clip: Clip | null) {
+  if (!clip || !isSoundOn || !token) return
+  stopClip()
+  // The token rides in the URL because it is the one form both players can send.
+  const url = `${baseUrl}/api/gameplay/audio/${encodeURIComponent(clip.audioKey)}?token=${encodeURIComponent(token)}`
+  try {
+    if (hasFfplay === undefined) {
+      hasFfplay = await $.process
+        .run(['ffplay', '-version'], { timeoutMs: PLAYER_PROBE_MS })
+        .then(ran => ran.exitCode === 0)
+        .catch(() => false)
+      // Another clip, or a mute, may have come while the machine was asked.
+      if (stopPlaying || !isSoundOn) return
+    }
+    if (!hasFfplay) {
+      // The engine's player has a voice on macOS only, and plays the recording untrimmed.
+      const stop = new AbortController()
+      stopPlaying = () => stop.abort()
+      void $.audio.play({ url }, { signal: stop.signal }).catch(() => {})
+
+      return
+    }
+    const from = clip.startSeconds > 0 ? ['-ss', clip.startSeconds.toFixed(3)] : []
+    const length = clip.endSeconds > clip.startSeconds ? ['-t', (clip.endSeconds - clip.startSeconds).toFixed(3)] : []
+    const child = $.process.spawn({
+      argv: ['ffplay', '-nodisp', '-autoexit', '-loglevel', 'quiet', ...from, ...length, url],
+    })
+    child.result.catch(() => {})
+    // Leaving the stream is what ends the child.
+    stopPlaying = () => void child.return({ code: null, signal: null }).catch(() => {})
+    void (async () => {
+      try {
+        for await (const piece of child) void piece
+      } catch {
+        // ffplay went away, or could not reach the server.
+      }
+    })()
+  } catch {
+    // No player could be started.
+  }
+}
+
+/** The round's clip, once it may be heard: from the start, or from the answer when it would give it away. */
+function heardClip(of: Round, config: GameConfig): Clip | null {
+  return clipOf(of.item, config, 'shown') ?? (of.chosen === null ? null : clipOf(of.item, config, 'settled'))
+}
+
+async function replay($: EngineInterface) {
+  if (phase !== 'playing' || !session || !round) return
+  await playClip($, heardClip(round, session.config))
+}
+
 async function draw($: EngineInterface) {
   if (!session || !round) return
   const now = await $.clock.now()
@@ -150,6 +214,7 @@ async function draw($: EngineInterface) {
     isLongHaul: session.isLongHaul,
     nextInSeconds: round.nextAt === null ? null : Math.max(0, Math.ceil((round.nextAt - now) / 1000)),
     score: { ...score },
+    canReplay: isSoundOn && heardClip(round, session.config) !== null,
     notice,
   }
   await update($, view, () => next)
@@ -232,6 +297,7 @@ async function unlinkOn(error: unknown, $: EngineInterface): Promise<boolean> {
 async function startRound($: EngineInterface) {
   round = null
   clearRoundTimers()
+  stopClip()
   try {
     if (!session) {
       await update($, view, () => WELCOME)
@@ -276,6 +342,7 @@ async function startRound($: EngineInterface) {
   }
   armRound($, round.limitMs)
   await draw($)
+  await playClip($, clipOf(item, session.config, 'shown'))
 }
 
 function armRound($: EngineInterface, remainingMs: number) {
@@ -305,6 +372,7 @@ async function answer($: EngineInterface, index: number) {
     // Nobody was looking: the answer is shown, and nothing is counted or recorded.
     await draw($)
     roundTimers = [$.clock.after(MISS_PAUSE_MS, () => void startRound($))]
+    await playClip($, clipOf(played.item, game.config, 'settled'))
 
     return
   }
@@ -336,6 +404,7 @@ async function answer($: EngineInterface, index: number) {
     roundTimers = [$.clock.after(CORRECT_PAUSE_MS, () => void startRound($))]
   }
   await draw($)
+  await playClip($, clipOf(played.item, game.config, 'settled'))
 
   try {
     await $.store.set(`samples:${game.courseId}:${level}:${game.config.mode}`, game.samples)
@@ -395,6 +464,7 @@ async function choose($: EngineInterface, picked: Mode) {
 /** Stops the clock: an open round keeps its place, a settled one is dropped. */
 async function freeze($: EngineInterface) {
   clearRoundTimers()
+  stopClip()
   if (!round) return
   if (round.chosen !== null) round = null
   else if (round.frozenAt === null) round.frozenAt = await $.clock.now()
@@ -513,13 +583,14 @@ export const register: Register = (on, options) => {
     const link = (await $.store.get('link')) as { token?: string; baseUrl?: string } | undefined
     token = link?.token && link.baseUrl === baseUrl ? link.token : null
     isOn = (await $.store.get('isOn')) === true
+    isSoundOn = (await $.store.get('isSoundOn')) !== false
     const saved = await $.store.get('mode')
     mode = MODES.find(entry => entry.mode === saved)?.mode ?? mode
     armDropIn($)
     await $.command.register({
       name: 'wep',
       description: 'Play Word Exchange Plaza while Claude works',
-      argumentHint: '[menu|hide|off|unlink]',
+      argumentHint: '[menu|hide|sound|off|unlink]',
       immediate: true,
     })
 
@@ -554,6 +625,15 @@ export const register: Register = (on, options) => {
       return { text: 'Word Exchange Plaza is hidden. Run /wep to bring it back.' }
     }
 
+    if (arg === 'sound' || arg === 'sound on' || arg === 'sound off') {
+      isSoundOn = arg === 'sound' ? !isSoundOn : arg === 'sound on'
+      await $.store.set('isSoundOn', isSoundOn)
+      if (!isSoundOn) stopClip()
+      await draw($)
+
+      return { text: `Word Exchange Plaza sound is ${isSoundOn ? 'on' : 'off'}.` }
+    }
+
     isOn = true
     isDismissed = false
     await $.store.set('isOn', true)
@@ -567,7 +647,7 @@ export const register: Register = (on, options) => {
     else if (arg === 'menu') await showMenu($)
 
     return {
-      text: 'Word Exchange Plaza is on and stays open until you close it. /wep menu changes mode, /wep hide closes it.',
+      text: 'Word Exchange Plaza is on and stays open until you close it. /wep menu changes mode, /wep sound mutes it, /wep hide closes it.',
     }
   })
 
@@ -704,6 +784,7 @@ export const register: Register = (on, options) => {
             {shown.isLongHaul && verdict !== '' && (
               <Button key="next" hotkey="n" plain label="Next  " onPress={() => skip($)} />
             )}
+            {shown.canReplay && <Button key="replay" hotkey="r" plain label="Replay  " onPress={() => replay($)} />}
             {menu}
           </Box>
         </Box>

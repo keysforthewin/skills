@@ -21,6 +21,9 @@ const WORD = {
   targetText: 'पानी',
   english: ['water'],
   transliterations: { itrans: 'pAnI' },
+  audioKey: 'a1b2c3d4e5f60718',
+  audioTrimStart: 0.25,
+  audioTrimEnd: 1.75,
   confusables: [
     { native: 'चाय', resolvedEnglish: ['tea'] },
     { native: 'दूध', resolvedEnglish: ['milk'] },
@@ -36,15 +39,18 @@ type World = {
   toasts: string[]
   records: { path: string; isCorrect: boolean; reactionTimeMs: number | null; level?: number; blankWordItemId?: string }[]
   requests: string[]
+  /** What was handed to ffplay, and to the engine's own player. */
+  spawns: string[][]
+  plays: unknown[]
 }
 
 // The world beneath the plugin: a linked, switched-on terminal (unless told
 // otherwise), a server with one phrase, and a terminal wide enough for a pane.
 function world(
   on: On,
-  { isLinked = true, isOn = true, isPlaced = true, check = 'allow', settings = {}, hasExtinction = true } = {},
+  { isLinked = true, isOn = true, isPlaced = true, check = 'allow', settings = {}, hasExtinction = true, hasFfplay = true } = {},
 ): World {
-  const state: World = { clock: mock.clock(on, { now: 1_000_000 }), opens: 0, closes: 0, toasts: [], records: [], requests: [] }
+  const state: World = { clock: mock.clock(on, { now: 1_000_000 }), opens: 0, closes: 0, toasts: [], records: [], requests: [], spawns: [], plays: [] }
   mock.store(on, { ...(isLinked ? { link: { token: 'link-token', baseUrl: BASE } } : {}), isOn })
 
   const json = (data: unknown, status = 200) => ({
@@ -78,7 +84,25 @@ function world(
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('turn.start', ($, e) => ({ turnId: e.turnId }))
   on('turn.complete', ($, e) => ({ text: e.answer }))
-  on('process.run', () => ({ value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
+  on('process.run', ($, e) => ({
+    value: {
+      exitCode: e.argv[0] === 'ffplay' && !hasFfplay ? 127 : 0,
+      stdout: '',
+      stderr: '',
+      isStdoutTruncated: false,
+      isStderrTruncated: false,
+    },
+  }))
+  on('process.spawn', async function* ($, e) {
+    state.spawns.push([...e.argv])
+
+    return { code: 0, signal: null }
+  })
+  on('audio.play', ($, e) => {
+    state.plays.push(e.clip)
+
+    return { value: undefined }
+  })
   on('ui.open', () => {
     state.opens += 1
 
@@ -397,4 +421,72 @@ test('/wep off closes the pane and stays out', async ($, on) => {
   await $.turn.start({ ...turn, turnId: 't2' })
   await w.clock.advance(5000)
   expect(w.opens).toBe(1)
+})
+
+const WORD_CLIP = `${BASE}/api/gameplay/audio/a1b2c3d4e5f60718?token=link-token`
+
+test('a word asked in its own script is spoken as it appears, trimmed, and again on Replay', async ($, on) => {
+  const w = world(on)
+  await $.session.start(START)
+  await w.clock.advance(2000)
+  const pane = await mountPane($)
+  await pressText(pane, 'Level 1')
+  expect(w.spawns).toEqual([['ffplay', '-nodisp', '-autoexit', '-loglevel', 'quiet', '-ss', '0.250', '-t', '1.500', WORD_CLIP]])
+  await pressText(pane, 'Replay')
+  expect(w.spawns.length).toBe(2)
+  await pressText(pane, 'water')
+  expect(w.spawns.length).toBe(2)
+  await pane.unmount()
+})
+
+test('a word asked in English is spoken only once it is answered', async ($, on) => {
+  const w = world(on, { settings: { gameMode: 'b' } })
+  await $.session.start(START)
+  await w.clock.advance(2000)
+  const pane = await mountPane($)
+  await pressText(pane, 'Level 1')
+  expect(w.spawns).toEqual([])
+  expect((await buttons(pane)).some(button => button.text?.includes('Replay'))).toBe(false)
+  await pressText(pane, 'पानी')
+  expect(w.spawns.length).toBe(1)
+  expect((await buttons(pane)).some(button => button.text?.includes('Replay'))).toBe(true)
+  await pane.unmount()
+})
+
+test('an item with no recording is silent', async ($, on) => {
+  const w = world(on)
+  await $.session.start(START)
+  await w.clock.advance(2000)
+  const pane = await mountPane($)
+  await pressText(pane, 'Level 3')
+  expect(w.spawns).toEqual([])
+  expect((await buttons(pane)).some(button => button.text?.includes('Replay'))).toBe(false)
+  await pane.unmount()
+})
+
+test('/wep sound off keeps it quiet, and /wep sound brings it back', async ($, on) => {
+  const w = world(on)
+  await $.session.start(START)
+  await w.clock.advance(2000)
+  await $.command.run({ command: 'wep', args: 'sound off' } as never)
+  const pane = await mountPane($)
+  await pressText(pane, 'Level 1')
+  expect(w.spawns).toEqual([])
+  expect((await buttons(pane)).some(button => button.text?.includes('Replay'))).toBe(false)
+  const ran = await $.command.run({ command: 'wep', args: 'sound' } as never)
+  expect(ran.text).toContain('sound is on')
+  await pressText(pane, 'Replay')
+  expect(w.spawns.length).toBe(1)
+  await pane.unmount()
+})
+
+test('without ffplay the clip goes to the engine\'s own player', async ($, on) => {
+  const w = world(on, { hasFfplay: false })
+  await $.session.start(START)
+  await w.clock.advance(2000)
+  const pane = await mountPane($)
+  await pressText(pane, 'Level 1')
+  expect(w.spawns).toEqual([])
+  expect(w.plays).toEqual([{ url: WORD_CLIP }])
+  await pane.unmount()
 })

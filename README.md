@@ -73,16 +73,22 @@ Code, in the time you would otherwise spend watching a spinner.
   comes. Only an answer you press is recorded.
 - With long haul switched on in your web settings, a round has no time limit,
   and the next one follows after your cooldown (`n` skips the wait).
+- Each letter, word and phrase is spoken as it is on the web: when it appears,
+  or once you have answered when hearing it would give the answer away. `r`
+  says it again, and `/wep sound` turns sound off and on.
 - Answers are recorded on your Word Exchange Plaza account, the same as playing
   on the web.
 
 It is plain text, so it works in any terminal. Phrases in a non-Latin script are
-shown with their romanised form beside them.
+shown with their romanised form beside them. Sound is streamed from the site and
+needs a player: `ffplay` (part of ffmpeg) on Linux and WSL, where it also needs
+working audio such as WSLg; on macOS it works without it. With no player the
+game is simply silent.
 
 Run `/wep` once to link the terminal to your account: it prints a link and a
 code, and you approve it in the browser while signed in. The token it gets can
-fetch your items and record answers, and nothing else on your account.
-`/wep menu` changes mode, `/wep hide` closes the pane until the next `/wep`,
+fetch your items and their recordings and record answers, and nothing else on
+your account. `/wep menu` changes mode, `/wep sound` mutes it, `/wep hide` closes the pane until the next `/wep`,
 `/wep off` turns it off, and `/wep unlink` forgets the account.
 
 It needs Claude Code 2.1.287 or later (it uses the early-access function-hooks

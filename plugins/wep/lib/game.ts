@@ -26,8 +26,15 @@ export type Item = {
   english?: string[]
   transliterations?: Record<string, string>
   confusables?: Confusable[]
+  /** The item spoken, on the server's audio route; absent or null when it has no recording. */
+  audioKey?: string | null
+  /** Seconds into the recording where the speech starts and ends; an end of 0 is the recording's own. */
+  audioTrimStart?: number
+  audioTrimEnd?: number
   _priority?: { weight?: number }
 }
+
+export type Clip = { audioKey: string; startSeconds: number; endSeconds: number }
 
 export type GameConfig = {
   level: Mode
@@ -82,6 +89,15 @@ export function promptOf(item: Item, config: GameConfig): { text: string; sub: s
   return config.mode === 'a'
     ? { text: item.targetText, sub: romanized(item.transliterations, config.transliteration) }
     : { text: item.english?.[0] ?? '', sub: '' }
+}
+
+/** What is spoken when the round is shown, or once it is settled; null when nothing is. */
+export function clipOf(item: Item, config: GameConfig, moment: 'shown' | 'settled'): Clip | null {
+  // Asked in English, a single item's sound would be its answer, so it waits for the answer.
+  const isHeldBack = isSingleItem(config) && config.mode === 'b'
+  if (!item.audioKey || isHeldBack !== (moment === 'settled')) return null
+
+  return { audioKey: item.audioKey, startSeconds: item.audioTrimStart || 0, endSeconds: item.audioTrimEnd || 0 }
 }
 
 /** An item the round can be played on: it has a prompt and something to confuse it with. */

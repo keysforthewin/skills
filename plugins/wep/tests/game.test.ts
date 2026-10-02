@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'claude-code/testing'
 
-import { buildOptions, defaultQ3Ms, isPlayable, promptOf, requeueAfterMiss, sortByWeight, timeLimitMs, withSample } from '../lib/game'
+import { buildOptions, clipOf, defaultQ3Ms, isPlayable, promptOf, requeueAfterMiss, sortByWeight, timeLimitMs, withSample } from '../lib/game'
 import type { GameConfig, Item } from '../lib/game'
 
 const modeA: GameConfig = { level: 3, mode: 'a', difficulty: 'hard', transliteration: 'itrans' }
@@ -145,6 +145,35 @@ describe('level 2', () => {
     expect(isPlayable(blanked, level2)).toBe(true)
     expect(isPlayable({ ...blanked, blankWord: undefined }, level2)).toBe(false)
     expect(isPlayable({ ...blanked, english: [] }, { ...level2, mode: 'b' })).toBe(false)
+  })
+})
+
+describe('sound', () => {
+  const spoken: Item = { ...phrase, audioKey: 'k1', audioTrimStart: 0.2, audioTrimEnd: 1.4 }
+  const clip = { audioKey: 'k1', startSeconds: 0.2, endSeconds: 1.4 }
+  const level1: GameConfig = { ...modeA, level: 1 }
+
+  test('a phrase is spoken as it is shown, in either direction', () => {
+    for (const level of [2, 3] as const) {
+      expect(clipOf(spoken, { ...modeA, level }, 'shown')).toEqual(clip)
+      expect(clipOf(spoken, { ...modeB, level }, 'shown')).toEqual(clip)
+      expect(clipOf(spoken, { ...modeB, level }, 'settled')).toBeNull()
+    }
+  })
+
+  test('a single item asked in English waits for its answer, where its sound would give it away', () => {
+    for (const level of [1, 'extinction'] as const) {
+      expect(clipOf(spoken, { ...level1, level }, 'shown')).toEqual(clip)
+      expect(clipOf(spoken, { ...level1, level }, 'settled')).toBeNull()
+      expect(clipOf(spoken, { ...level1, level, mode: 'b' }, 'shown')).toBeNull()
+      expect(clipOf(spoken, { ...level1, level, mode: 'b' }, 'settled')).toEqual(clip)
+    }
+  })
+
+  test('an item with no recording says nothing, and one with no trim plays whole', () => {
+    expect(clipOf(phrase, modeA, 'shown')).toBeNull()
+    expect(clipOf({ ...phrase, audioKey: null }, modeA, 'shown')).toBeNull()
+    expect(clipOf({ ...phrase, audioKey: 'k2' }, modeA, 'shown')).toEqual({ audioKey: 'k2', startSeconds: 0, endSeconds: 0 })
   })
 })
 
