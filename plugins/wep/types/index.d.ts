@@ -20,6 +20,8 @@ export type WepView =
       lines: string[]
       /** Whether the message offers the way back to the menu. */
       hasMenu: boolean
+      /** Whether the message is a load that failed, and offers to try it again. */
+      canRetry: boolean
     }
   | {
       kind: 'menu'
@@ -52,6 +54,8 @@ export type WepView =
       canReplay: boolean
       /** What the hand-back says over a frozen round ('' while playing). */
       notice: string
+      /** What went wrong reaching the server while the round stays playable ('' when nothing has). */
+      trouble: string
     }
 
 declare module 'claude-code' {

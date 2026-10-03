@@ -42,6 +42,8 @@ type World = {
   /** What was handed to ffplay, and to the engine's own player. */
   spawns: string[][]
   plays: unknown[]
+  /** The server's trouble: answering 503 to everything, or not answering at all. */
+  outage: 'none' | 'refusing' | 'silent'
 }
 
 // The world beneath the plugin: a linked, switched-on terminal (unless told
@@ -50,7 +52,7 @@ function world(
   on: On,
   { isLinked = true, isOn = true, isPlaced = true, check = 'allow', settings = {}, hasExtinction = true, hasFfplay = true } = {},
 ): World {
-  const state: World = { clock: mock.clock(on, { now: 1_000_000 }), opens: 0, closes: 0, toasts: [], records: [], requests: [], spawns: [], plays: [] }
+  const state: World = { clock: mock.clock(on, { now: 1_000_000 }), opens: 0, closes: 0, toasts: [], records: [], requests: [], spawns: [], plays: [], outage: 'none' }
   mock.store(on, { ...(isLinked ? { link: { token: 'link-token', baseUrl: BASE } } : {}), isOn })
 
   const json = (data: unknown, status = 200) => ({
@@ -59,6 +61,8 @@ function world(
   on('http.fetch', ($, e) => {
     const path = e.url.replace(BASE, '')
     state.requests.push(`${e.init?.method ?? 'GET'} ${path}`)
+    if (state.outage === 'silent') return new Promise<never>(() => {})
+    if (state.outage === 'refusing') return json({ error: 'unavailable' }, 503)
     if (path === '/api/me') {
       return json({ currentStreak: 4, settings: { gameMode: 'a', difficultyMode: 'hard', ...settings } })
     }
@@ -524,5 +528,104 @@ test('without ffplay the clip goes to the engine\'s own player', async ($, on) =
   await pressText(pane, 'Level 1')
   expect(w.spawns).toEqual([])
   expect(w.plays).toEqual([{ url: WORD_CLIP }])
+  await pane.unmount()
+})
+
+const texts = async (pane: Pane) => (await pane.findAll({ type: 'Text' })).map(text => text.text ?? '').join('\n')
+const hasOption = async (pane: Pane, text: string) => (await buttons(pane)).some(button => button.text?.includes(text))
+const openOnMenu = async ($: Parameters<typeof mountPane>[0], w: World) => {
+  await $.session.start(START)
+  await $.turn.start(turn)
+  await w.clock.advance(2100)
+
+  return mountPane($)
+}
+
+test('a load the server refuses is retried, says so, and goes on once the server is back', async ($, on) => {
+  const w = world(on)
+  const pane = await openOnMenu($, w)
+  w.outage = 'refusing'
+  await pressText(pane, 'Level 1')
+  expect(await texts(pane)).toContain('retry 1 of 5')
+  await w.clock.advance(1100)
+  expect(await texts(pane)).toContain('retry 2 of 5')
+  w.outage = 'none'
+  await w.clock.advance(2100)
+  expect(await hasOption(pane, 'water')).toBe(true)
+  await pane.unmount()
+})
+
+test('after five retries the load gives up and says so, and Try again loads it', async ($, on) => {
+  const w = world(on)
+  const pane = await openOnMenu($, w)
+  w.outage = 'refusing'
+  await pressText(pane, 'Level 1')
+  await w.clock.advance(30_000)
+  expect(await texts(pane)).toContain('Could not reach Word Exchange Plaza after 5 retries.')
+  expect(w.requests.filter(request => request === 'GET /api/me').length).toBe(6)
+  await w.clock.advance(60_000)
+  expect(w.requests.filter(request => request === 'GET /api/me').length).toBe(6)
+  w.outage = 'none'
+  await pressText(pane, 'Try again')
+  expect(await hasOption(pane, 'water')).toBe(true)
+  await pane.unmount()
+})
+
+test('a server that never answers is given up on, not waited for forever', async ($, on) => {
+  const w = world(on)
+  const pane = await openOnMenu($, w)
+  w.outage = 'silent'
+  void pressText(pane, 'Level 1')
+  await w.clock.advance(1000)
+  expect(await texts(pane)).toContain('Loading')
+  expect(await hasOption(pane, 'Menu')).toBe(true)
+  await w.clock.advance(15_000)
+  expect(await texts(pane)).toContain('retry 1 of 5')
+  // Six tries of fifteen seconds, and the waits between them.
+  await w.clock.advance(120_000)
+  expect(await texts(pane)).toContain('after 5 retries')
+  await pane.unmount()
+})
+
+test('the menu takes over from a load that is being retried', async ($, on) => {
+  const w = world(on)
+  const pane = await openOnMenu($, w)
+  w.outage = 'refusing'
+  await pressText(pane, 'Level 1')
+  await pressText(pane, 'Menu')
+  await w.clock.advance(60_000)
+  expect(await hasOption(pane, 'Level 3')).toBe(true)
+  expect(await texts(pane)).not.toContain('Could not reach')
+  w.outage = 'none'
+  await pressText(pane, 'Level 3')
+  expect(await hasOption(pane, 'Hello friend')).toBe(true)
+  await pane.unmount()
+})
+
+test('an answer the server never takes is said to be unsaved, and the game goes on', async ($, on) => {
+  const w = world(on, { settings: { longHaulMode: true, longHaulCooldownSeconds: 1 } })
+  const pane = await openOnMenu($, w)
+  await pressText(pane, 'Level 1')
+  w.outage = 'silent'
+  void pressText(pane, 'water')
+  await w.clock.advance(16_000)
+  expect(await texts(pane)).toContain('last answer not saved')
+  expect(w.requests.filter(request => request === 'POST /api/gameplay/record').length).toBe(1)
+  expect(await hasOption(pane, 'water')).toBe(true)
+  w.outage = 'none'
+  await pressText(pane, 'water')
+  expect(await texts(pane)).not.toContain('not saved')
+  await pane.unmount()
+})
+
+test('a /clear leaves the pane on the menu rather than on a dead round', async ($, on) => {
+  const w = world(on, { settings: { longHaulMode: true } })
+  on('session.end', ($, e) => ({ sessionId: e.sessionId }))
+  const pane = await openOnMenu($, w)
+  await pressText(pane, 'Level 1')
+  await $.session.end({ reason: 'clear', sessionId: 's1', resume: {} } as never)
+  expect(await hasOption(pane, 'Level 1')).toBe(true)
+  await pressText(pane, 'Level 1')
+  expect(await hasOption(pane, 'water')).toBe(true)
   await pane.unmount()
 })

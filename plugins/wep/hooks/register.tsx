@@ -41,6 +41,12 @@ const SKIP_GRACE_MS = 600
 const LATE_AFTER_LIMITS = 2
 // Long haul: the prompt is spoken again after this much silence, until it is answered.
 const LOOP_GAP_MS = 3000
+// The host's fetch has no time limit of its own: a request the server never answers is given up on after this.
+const REQUEST_TIMEOUT_MS = 15_000
+// A load that fails is asked again this many times, waiting a little longer before each. The waits run on
+// timers of their own: a press's hook is cut off long before they would be over.
+const RETRIES = 5
+const RETRY_WAITS_MS = [1000, 2000, 4000, 8000, 8000]
 
 const MODES: { mode: Mode; label: string; sub: string; empty: string[] }[] = [
   { mode: 1, label: 'Level 1', sub: 'Reaction Time', empty: ['Nothing to practise at Level 1 right now.', 'Check back later.'] },
@@ -64,7 +70,9 @@ const MODES: { mode: Mode; label: string; sub: string; empty: string[] }[] = [
   },
 ]
 
-const WELCOME: WepView = { kind: 'message', title: TITLE, lines: ['Loading…'], hasMenu: false }
+// What the pane says before anything has drawn into it, and whenever the host's copy of the view starts
+// over under a pane that is still up: it must offer a way on, so it is never the loading message.
+const WELCOME: WepView = { kind: 'message', title: TITLE, lines: ['Press m to pick a mode.'], hasMenu: true, canRetry: false }
 const view = atom({ plugin: 'wep', key: 'view' } as const, WELCOME)
 const isOffered = atom({ plugin: 'wep', key: 'isOffered' } as const, false)
 
@@ -108,6 +116,9 @@ class ApiError extends Error {
 /** The server is older than this mode: its link tokens cannot reach the mode's routes. */
 class ModeUnavailable extends Error {}
 
+/** The server did not answer within REQUEST_TIMEOUT_MS. */
+class Unanswered extends Error {}
+
 // A hook's `$` may only be handed to functions declared at the top of this
 // file, so the game's state lives here beside them rather than in `register`.
 let baseUrl = 'https://wordexchangeplaza.com'
@@ -129,6 +140,10 @@ let roundCount = 0
 let roundTimers: Timer[] = []
 let pairing: Timer | undefined
 let notice = ''
+// What went wrong with the server behind a round that is still playable ('' when nothing has).
+let trouble = ''
+// Counts every start and stop of a round, so a load that was overtaken knows to drop what it fetched.
+let startTurn = 0
 let isSoundOn = true
 // How ffplay is started on this machine, asked once; null without it, and the engine's own player is used.
 let ffplay: string[] | null | undefined
@@ -139,21 +154,34 @@ let repeatTimer: Timer | undefined
 const score: WepScore = { correct: 0, attempts: 0, streak: 0, points: 0 }
 
 async function api($: EngineInterface, method: string, path: string, body?: unknown, auth = true) {
-  const response = await $.http.fetch(baseUrl + path, {
-    method,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(auth && token ? { Authorization: `Bearer ${token}` } : {}),
-    },
-    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-  })
+  let giveUp: Timer | undefined
+  const response = await Promise.race([
+    $.http.fetch(baseUrl + path, {
+      method,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(auth && token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    }),
+    new Promise<never>((_, reject) => {
+      giveUp = $.clock.after(REQUEST_TIMEOUT_MS, () => reject(new Unanswered()))
+    }),
+  ]).finally(() => giveUp?.cancel())
   if (!response.ok && response.status !== 202) throw new ApiError(response.status)
 
   return { status: response.status, data: JSON.parse(response.text || '{}') }
 }
 
+/** A failure another try may get past: no answer, a broken answer, or the server's own trouble. */
+function isWorthRetrying(error: unknown): boolean {
+  if (error instanceof ModeUnavailable) return false
+
+  return !(error instanceof ApiError) || error.status === 429 || error.status >= 500
+}
+
 const showMessage = ($: EngineInterface, ...lines: string[]) =>
-  update($, view, (): WepView => ({ kind: 'message', title: TITLE, lines, hasMenu: token !== null }))
+  update($, view, (): WepView => ({ kind: 'message', title: TITLE, lines, hasMenu: token !== null, canRetry: false }))
 
 const named = (of: Mode) => MODES.find(entry => entry.mode === of) ?? MODES[2]!
 
@@ -284,6 +312,7 @@ async function draw($: EngineInterface) {
     score: { ...score },
     canReplay: isSoundOn && heardClip(round, session.config) !== null,
     notice,
+    trouble,
   }
   await update($, view, () => next)
 }
@@ -363,30 +392,47 @@ async function unlinkOn(error: unknown, $: EngineInterface): Promise<boolean> {
   return true
 }
 
-async function startRound($: EngineInterface) {
+/** Starts the next round, loading the game first when there is none; `retry` counts the loads that failed before this one. */
+async function startRound($: EngineInterface, retry = 0) {
   round = null
   clearRoundTimers()
   stopClip()
+  const turn = ++startTurn
+  const isOvertaken = () => turn !== startTurn
   try {
     if (!session) {
-      await update($, view, () => WELCOME)
-      session = await loadSession($)
+      if (retry === 0) await showMessage($, 'Loading…')
+      const loaded = await loadSession($)
+      if (isOvertaken()) return
+      session = loaded
+      trouble = ''
     }
     // An extinct word is reviewed once; the levels go round again.
     if (session.queue.length === 0 && session.config.level !== 'extinction') {
       session.queue = sortByWeight(session.pool, session.stats)
     }
   } catch (error) {
+    // The menu came up, or the pane stepped aside, while it loaded: what it came to is nobody's news.
+    if (isOvertaken()) return
     if (error instanceof ModeUnavailable) {
       await showMessage($, 'Extinction needs a newer Word Exchange Plaza server.', 'Pick another mode for now.')
+    } else if (isWorthRetrying(error) && retry < RETRIES) {
+      await showMessage($, 'Loading…', `The server is not answering · retry ${retry + 1} of ${RETRIES}`)
+      // The message was drawn while the menu came up over it: the menu's own draw may have lost to it.
+      if (isOvertaken()) return
+      roundTimers = [$.clock.after(RETRY_WAITS_MS[retry] ?? 0, () => void startRound($, retry + 1))]
     } else if (!(await unlinkOn(error, $))) {
-      await showMessage($, 'Could not reach Word Exchange Plaza.', 'Pick a mode to try again.')
+      const lines = [
+        retry > 0 ? `Could not reach Word Exchange Plaza after ${retry} retries.` : 'Could not reach Word Exchange Plaza.',
+        'Check the connection, then try again.',
+      ]
+      await update($, view, (): WepView => ({ kind: 'message', title: TITLE, lines, hasMenu: token !== null, canRetry: true }))
     }
 
     return
   }
-  // The pane may have stepped aside, or the menu come up, while the items loaded.
-  if (phase !== 'playing' || isMenuUp) return
+  // Another start may have overtaken this one, the pane stepped aside, or the menu come up, while the items loaded.
+  if (isOvertaken() || phase !== 'playing' || isMenuUp) return
 
   const item = session.queue.shift()
   if (!item) {
@@ -496,10 +542,34 @@ async function answer($: EngineInterface, index: number) {
     score.streak = Number(data.currentStreak ?? score.streak)
     score.points += Number(data.pointsAwarded ?? 0)
     if (level !== 'extinction' && (data.wentExtinct || data.tierAscended || data.levelComplete)) {
-      await loadItems($, game)
+      return refreshItems($, game)
     }
+    await say($, '')
   } catch (error) {
-    if (await unlinkOn(error, $)) clearRoundTimers()
+    if (await unlinkOn(error, $)) return clearRoundTimers()
+    // An answer is sent once: sent again, one the server did take would count twice.
+    await say($, 'server not answering, last answer not saved')
+  }
+}
+
+/** Puts the server's trouble on the round's status line, or with '' takes it off. */
+async function say($: EngineInterface, what: string) {
+  if (trouble === what) return
+  trouble = what
+  await draw($)
+}
+
+/** Fetches the game's items again after the server changed them, retried like the first load while the game goes on. */
+async function refreshItems($: EngineInterface, game: Session, retry = 0) {
+  if (session !== game) return
+  try {
+    await loadItems($, game)
+    await say($, '')
+  } catch (error) {
+    if (await unlinkOn(error, $)) return clearRoundTimers()
+    if (!isWorthRetrying(error) || retry === RETRIES) return say($, 'could not reach the server for new words')
+    await say($, `server not answering, retry ${retry + 1} of ${RETRIES}`)
+    $.clock.after(RETRY_WAITS_MS[retry] ?? 0, () => void refreshItems($, game, retry + 1))
   }
 }
 
@@ -507,6 +577,12 @@ async function answer($: EngineInterface, index: number) {
 async function skip($: EngineInterface) {
   if (phase !== 'playing' || !round || round.settledAt === null) return
   if ((await $.clock.now()) - round.settledAt < SKIP_GRACE_MS) return
+  await startRound($)
+}
+
+/** The person's Try again on a load that failed. */
+async function retryLoad($: EngineInterface) {
+  if (phase !== 'playing' || isMenuUp || round) return
   await startRound($)
 }
 
@@ -533,6 +609,7 @@ async function choose($: EngineInterface, picked: Mode) {
 
 /** Stops the clock: an open round keeps its place, a settled one is dropped. */
 async function freeze($: EngineInterface) {
+  startTurn += 1
   clearRoundTimers()
   stopClip()
   if (!round) return
@@ -671,6 +748,8 @@ export const register: Register = (on, options) => {
 
   on('session.end', async ($, e, next) => {
     await endSession($)
+    // After a /clear the process and the pane go on with the game gone: the menu is the way back in.
+    if (phase === 'playing') await showMenu($)
 
     return next(e)
   })
@@ -780,7 +859,10 @@ export const register: Register = (on, options) => {
           {shown.lines.map(line => (
             <Text dimColor>{line}</Text>
           ))}
-          {shown.hasMenu && menu}
+          <Box>
+            {shown.canRetry && <Button key="retry" hotkey="t" plain label="Try again  " onPress={() => retryLoad($)} />}
+            {shown.hasMenu && menu}
+          </Box>
         </Box>
       )
     }
@@ -857,6 +939,7 @@ export const register: Register = (on, options) => {
         <Box justifyContent="space-between">
           <Text key="status" dimColor={verdict === ''}>
             {shown.notice || (verdict ? verdict + countdown : waiting)}
+            {shown.trouble && ` · ${shown.trouble}`}
           </Text>
           <Box>
             {(shown.isLongHaul || shown.chosen === -1) && verdict !== '' && (
